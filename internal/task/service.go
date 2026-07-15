@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,6 +91,30 @@ func (s *Service) Get(id string) (Task, error) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		return Task{}, fmt.Errorf("decode task manifest: %w", err)
 	}
+	return result, nil
+}
+
+// List reads all valid task manifests newest first.
+func (s *Service) List() ([]Task, error) {
+	entries, err := os.ReadDir(s.tasksDir())
+	if os.IsNotExist(err) {
+		return []Task{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+	result := make([]Task, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() || validID(entry.Name()) != nil {
+			continue
+		}
+		item, err := s.Get(entry.Name())
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
 	return result, nil
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,16 @@ func TestRunVersion(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout.String()) != "dev" {
 		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
+func TestRunServerStopsWithContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stdout, stderr bytes.Buffer
+	code := runServer(ctx, []string{"--data-dir", t.TempDir(), "--listen", "127.0.0.1:0"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
 }
 

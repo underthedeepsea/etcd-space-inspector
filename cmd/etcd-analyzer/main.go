@@ -5,12 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 	"time"
 
+	"etcd-analyzer/internal/api"
+	"etcd-analyzer/internal/app"
+	"etcd-analyzer/internal/config"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 	"etcd-analyzer/internal/version"
@@ -33,12 +38,92 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "analyze":
 		return runAnalyze(args[1:], stdout, stderr)
 	case "server":
-		fmt.Fprintln(stderr, "server is not implemented yet")
-		return 1
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runServer(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		return 2
 	}
+}
+
+func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("server", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "YAML configuration path")
+	listenOverride := flags.String("listen", "", "listen address")
+	dataDirOverride := flags.String("data-dir", "", "analysis data directory")
+	if err := flags.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	settings, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "load configuration: %v\n", err)
+		return 1
+	}
+	if *listenOverride != "" {
+		settings.Server.Listen = *listenOverride
+	}
+	if *dataDirOverride != "" {
+		settings.Server.DataDir = *dataDirOverride
+	}
+	if !loopbackAddress(settings.Server.Listen) {
+		fmt.Fprintf(stderr, "warning: listening on non-loopback address %s\n", settings.Server.Listen)
+	}
+
+	application := app.New(settings.Server.DataDir, nil)
+	handler := api.New(api.Dependencies{
+		Version: version.Value, Tasks: application, MaxInputBytes: settings.Security.MaxInputBytes,
+	})
+	listener, err := net.Listen("tcp", settings.Server.Listen)
+	if err != nil {
+		fmt.Fprintf(stderr, "listen: %v\n", err)
+		return 1
+	}
+	server := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	errors := make(chan error, 1)
+	go func() { errors <- server.Serve(listener) }()
+	fmt.Fprintf(stdout, "listening on %s\n", listener.Addr())
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			fmt.Fprintf(stderr, "shutdown: %v\n", err)
+			return 1
+		}
+		err := <-errors
+		if err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(stderr, "serve: %v\n", err)
+			return 1
+		}
+		return 0
+	case err := <-errors:
+		if err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(stderr, "serve: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+}
+
+func loopbackAddress(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func runAnalyze(args []string, stdout, stderr io.Writer) int {
