@@ -71,6 +71,31 @@ FROM tasks WHERE id = ?`, id).Scan(
 	return item, nil
 }
 
+// UpdateTask replaces mutable and imported task fields.
+func (r *Repository) UpdateTask(ctx context.Context, item task.Task) error {
+	result, err := r.db.ExecContext(ctx, `
+UPDATE tasks SET
+  name = ?, input_type = ?, source_path = ?, source_size = ?, source_sha256 = ?,
+  etcd_version = ?, status = ?, progress = ?, current_stage = ?, error_code = ?,
+  error_message = ?, started_at = ?, completed_at = ?, schema_version = ?
+WHERE id = ?`,
+		item.Name, item.InputType, item.SourcePath, item.SourceSize, item.SourceSHA256,
+		item.EtcdVersion, item.Status, item.Progress, item.CurrentStage, item.ErrorCode,
+		item.ErrorMessage, formatOptionalTime(item.StartedAt), formatOptionalTime(item.CompletedAt),
+		item.SchemaVersion, item.ID)
+	if err != nil {
+		return fmt.Errorf("update task: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count updated tasks: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("update task: task %s not found", item.ID)
+	}
+	return nil
+}
+
 // SaveCheckpoint records a completed stage idempotently.
 func (r *Repository) SaveCheckpoint(ctx context.Context, taskID, stage string, completedAt time.Time) error {
 	_, err := r.db.ExecContext(ctx, `

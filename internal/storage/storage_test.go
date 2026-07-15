@@ -55,6 +55,19 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	if got.ID != want.ID || got.Status != want.Status || !got.CreatedAt.Equal(want.CreatedAt) {
 		t.Fatalf("got=%+v", got)
 	}
+	want.Status = task.StatusRunning
+	want.Progress = 0.5
+	want.CurrentStage = "analyze"
+	if err := repo.UpdateTask(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.GetTask(context.Background(), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != task.StatusRunning || got.Progress != 0.5 || got.CurrentStage != "analyze" {
+		t.Fatalf("updated=%+v", got)
+	}
 }
 
 func TestRepositorySavesCheckpoint(t *testing.T) {
