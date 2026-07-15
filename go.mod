@@ -3,6 +3,7 @@ module etcd-analyzer
 go 1.19
 
 require (
+	go.etcd.io/bbolt v1.3.8
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.28.0
 )
