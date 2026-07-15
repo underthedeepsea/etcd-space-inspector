@@ -52,3 +52,33 @@ func TestApplicationCreatesRunsListsAndDeletesTask(t *testing.T) {
 		t.Fatalf("items=%+v err=%v", items, err)
 	}
 }
+
+func TestRecoverInterruptedTasks(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	source := filepath.Join(root, "input.db")
+	if err := os.WriteFile(source, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application := New(dataDir, nil)
+	created, err := application.Create(context.Background(), task.CreateRequest{
+		Name: "interrupted", SourcePath: source, InputType: "snapshot", MaxInputBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created.Status = task.StatusRunning
+	if err := task.NewService(dataDir).Save(created); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.RecoverInterrupted(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := application.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != task.StatusFailed || recovered.ErrorCode != "TASK_INTERRUPTED" {
+		t.Fatalf("recovered=%+v", recovered)
+	}
+}

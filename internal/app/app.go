@@ -17,12 +17,17 @@ type Application struct {
 	manifests *task.Service
 	stages    []task.Stage
 	mu        sync.Mutex
-	running   map[string]context.CancelFunc
+	running   map[string]runHandle
+}
+
+type runHandle struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // New creates an application rooted in dataDir.
 func New(dataDir string, stages []task.Stage) *Application {
-	return &Application{manifests: task.NewService(dataDir), stages: stages, running: make(map[string]context.CancelFunc)}
+	return &Application{manifests: task.NewService(dataDir), stages: stages, running: make(map[string]runHandle)}
 }
 
 // Create imports an input and initializes its SQLite task row.
@@ -72,6 +77,7 @@ func (a *Application) Start(ctx context.Context, id string) error {
 	repository := &repository{database: storage.NewRepository(db), manifests: a.manifests}
 	runner := task.NewRunner(repository, a.stages)
 	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	a.mu.Lock()
 	if _, exists := a.running[id]; exists {
 		a.mu.Unlock()
@@ -79,7 +85,7 @@ func (a *Application) Start(ctx context.Context, id string) error {
 		db.Close()
 		return fmt.Errorf("task %s is already running", id)
 	}
-	a.running[id] = cancel
+	a.running[id] = runHandle{cancel: cancel, done: done}
 	a.mu.Unlock()
 	go func() {
 		_ = runner.Start(runCtx, id)
@@ -88,6 +94,7 @@ func (a *Application) Start(ctx context.Context, id string) error {
 		a.mu.Lock()
 		delete(a.running, id)
 		a.mu.Unlock()
+		close(done)
 	}()
 	return nil
 }
@@ -95,24 +102,63 @@ func (a *Application) Start(ctx context.Context, id string) error {
 // Cancel signals a running task.
 func (a *Application) Cancel(id string) error {
 	a.mu.Lock()
-	cancel, exists := a.running[id]
+	handle, exists := a.running[id]
 	a.mu.Unlock()
 	if !exists {
 		return fmt.Errorf("task %s is not running", id)
 	}
-	cancel()
+	handle.cancel()
 	return nil
 }
 
 // Delete removes a task that is not running.
 func (a *Application) Delete(id string) error {
 	a.mu.Lock()
-	_, running := a.running[id]
+	handle, running := a.running[id]
 	a.mu.Unlock()
 	if running {
-		return fmt.Errorf("task %s is running", id)
+		item, err := a.manifests.Get(id)
+		if err != nil {
+			return err
+		}
+		if item.Status == task.StatusRunning || item.Status == task.StatusPending {
+			return fmt.Errorf("task %s is running", id)
+		}
+		<-handle.done
 	}
 	return a.manifests.Delete(id)
+}
+
+// RecoverInterrupted marks tasks left running by a previous process as failed.
+func (a *Application) RecoverInterrupted(ctx context.Context) error {
+	items, err := a.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.Status != task.StatusRunning {
+			continue
+		}
+		db, err := storage.Open(a.databasePath(item.ID))
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		item.Status = task.StatusFailed
+		item.ErrorCode = "TASK_INTERRUPTED"
+		item.ErrorMessage = "analysis process stopped before completion"
+		item.CompletedAt = &now
+		repository := &repository{database: storage.NewRepository(db), manifests: a.manifests}
+		updateErr := repository.UpdateTask(ctx, item)
+		closeErr := db.Close()
+		if updateErr != nil {
+			return updateErr
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close recovered task database: %w", closeErr)
+		}
+	}
+	return nil
 }
 
 func (a *Application) databasePath(id string) string {

@@ -76,6 +76,10 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 
 	application := app.New(settings.Server.DataDir, nil)
+	if err := application.RecoverInterrupted(ctx); err != nil {
+		fmt.Fprintf(stderr, "recover interrupted tasks: %v\n", err)
+		return 1
+	}
 	handler := api.New(api.Dependencies{
 		Version: version.Value, Tasks: application, MaxInputBytes: settings.Security.MaxInputBytes, UI: web.Handler(),
 	})

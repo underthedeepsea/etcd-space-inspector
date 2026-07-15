@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -21,12 +22,32 @@ func TestRunVersion(t *testing.T) {
 
 func TestRunServerStopsWithContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stdout := &listeningWriter{ready: make(chan struct{})}
+	var stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- runServer(ctx, []string{"--data-dir", t.TempDir(), "--listen", "127.0.0.1:0"}, stdout, &stderr)
+	}()
+	<-stdout.ready
 	cancel()
-	var stdout, stderr bytes.Buffer
-	code := runServer(ctx, []string{"--data-dir", t.TempDir(), "--listen", "127.0.0.1:0"}, &stdout, &stderr)
+	code := <-done
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
+}
+
+type listeningWriter struct {
+	bytes.Buffer
+	once  sync.Once
+	ready chan struct{}
+}
+
+func (w *listeningWriter) Write(contents []byte) (int, error) {
+	if bytes.Contains(contents, []byte("listening")) {
+		w.once.Do(func() { close(w.ready) })
+	}
+	return w.Buffer.Write(contents)
 }
 
 func TestRunAnalyzeImportsTask(t *testing.T) {
