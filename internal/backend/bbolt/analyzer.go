@@ -3,6 +3,7 @@ package bbolt
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,12 @@ import (
 	"unicode/utf8"
 
 	bolt "go.etcd.io/bbolt"
+)
+
+// Stable analyzer error classes used by task evidence.
+var (
+	ErrOpenFailed      = errors.New("bbolt open failed")
+	ErrIntegrityFailed = errors.New("bbolt integrity failed")
 )
 
 // Analyzer performs read-only physical bbolt inspection.
@@ -33,7 +40,7 @@ func (a *Analyzer) Run(ctx context.Context, sourcePath string, sink Sink) (Summa
 	}
 	db, err := bolt.Open(sourcePath, 0o400, &bolt.Options{ReadOnly: true, Timeout: time.Second})
 	if err != nil {
-		return Summary{}, fmt.Errorf("open bbolt read-only: %w", err)
+		return Summary{}, fmt.Errorf("%w: %v", ErrOpenFailed, err)
 	}
 	defer db.Close()
 
@@ -50,7 +57,7 @@ func (a *Analyzer) Run(ctx context.Context, sourcePath string, sink Sink) (Summa
 			}
 		}
 		if integrityErr != nil {
-			return fmt.Errorf("bbolt integrity check: %w", integrityErr)
+			return fmt.Errorf("%w: %v", ErrIntegrityFailed, integrityErr)
 		}
 		if err := ctx.Err(); err != nil {
 			return err

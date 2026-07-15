@@ -3,11 +3,15 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"etcd-analyzer/internal/apperr"
+	backend "etcd-analyzer/internal/backend/bbolt"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 )
@@ -28,6 +32,45 @@ type runHandle struct {
 // New creates an application rooted in dataDir.
 func New(dataDir string, stages []task.Stage) *Application {
 	return &Application{manifests: task.NewService(dataDir), stages: stages, running: make(map[string]runHandle)}
+}
+
+// NewM2 creates an application with physical bbolt analysis enabled.
+func NewM2(dataDir string, batchSize int) *Application {
+	application := New(dataDir, nil)
+	application.stages = []task.Stage{PhysicalStage(application.manifests, batchSize)}
+	return application
+}
+
+// PhysicalStage creates the M2 read-only bbolt analysis stage.
+func PhysicalStage(manifests *task.Service, batchSize int) task.Stage {
+	return task.Stage{Name: "bbolt-physical", Run: func(ctx context.Context, taskContext *task.Context) error {
+		taskDir := manifests.TaskDir(taskContext.Task.ID)
+		sourcePath := filepath.Join(taskDir, filepath.Clean(taskContext.Task.SourcePath))
+		relative, err := filepath.Rel(taskDir, sourcePath)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("task source escapes task directory")
+		}
+		db, err := storage.Open(filepath.Join(taskDir, "task.db"))
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		repository := storage.NewBboltRepository(db, taskContext.Task.ID)
+		if err := repository.Reset(ctx); err != nil {
+			return err
+		}
+		summary, err := backend.New(batchSize).Run(ctx, sourcePath, repository)
+		if err != nil {
+			if errors.Is(err, backend.ErrOpenFailed) {
+				return apperr.E("BBOLT_OPEN_FAILED", "unable to open bbolt database", err)
+			}
+			if errors.Is(err, backend.ErrIntegrityFailed) {
+				return apperr.E("BBOLT_INTEGRITY_FAILED", "bbolt integrity check failed", err)
+			}
+			return err
+		}
+		return repository.SaveSummary(ctx, summary)
+	}}
 }
 
 // Create imports an input and initializes its SQLite task row.
@@ -159,6 +202,36 @@ func (a *Application) RecoverInterrupted(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// Summary returns M2 physical space composition.
+func (a *Application) Summary(ctx context.Context, id string) (backend.Summary, error) {
+	db, err := storage.OpenReadOnly(a.databasePath(id))
+	if err != nil {
+		return backend.Summary{}, err
+	}
+	defer db.Close()
+	return storage.NewBboltRepository(db, id).Summary(ctx)
+}
+
+// Pages returns an indexed M2 physical page query.
+func (a *Application) Pages(ctx context.Context, id string, query storage.PageQuery) (storage.PageResult, error) {
+	db, err := storage.OpenReadOnly(a.databasePath(id))
+	if err != nil {
+		return storage.PageResult{}, err
+	}
+	defer db.Close()
+	return storage.NewBboltRepository(db, id).Pages(ctx, query)
+}
+
+// Buckets returns largest M2 buckets.
+func (a *Application) Buckets(ctx context.Context, id string, limit int) ([]backend.BucketStat, error) {
+	db, err := storage.OpenReadOnly(a.databasePath(id))
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return storage.NewBboltRepository(db, id).TopBuckets(ctx, limit)
 }
 
 func (a *Application) databasePath(id string) string {

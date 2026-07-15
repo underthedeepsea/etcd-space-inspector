@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"etcd-analyzer/internal/apperr"
 )
 
 // RunnerRepository is the persistence boundary required by Runner.
@@ -119,8 +121,14 @@ func (r *Runner) fail(ctx context.Context, item *Task, cause error) error {
 		cause = context.Canceled
 	} else {
 		item.Status = StatusFailed
-		item.ErrorCode = "INTERNAL_ERROR"
-		item.ErrorMessage = "analysis failed"
+		var coded *apperr.Error
+		if errors.As(cause, &coded) {
+			item.ErrorCode = coded.Code
+			item.ErrorMessage = coded.Message
+		} else {
+			item.ErrorCode = "INTERNAL_ERROR"
+			item.ErrorMessage = "analysis failed"
+		}
 	}
 	item.CompletedAt = &now
 	if err := r.repository.UpdateTask(context.Background(), *item); err != nil {

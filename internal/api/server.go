@@ -9,8 +9,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
+	backend "etcd-analyzer/internal/backend/bbolt"
+	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 )
 
@@ -27,10 +30,18 @@ type TaskService interface {
 	Delete(string) error
 }
 
+// AnalysisService is the M2 read-only query boundary.
+type AnalysisService interface {
+	Summary(context.Context, string) (backend.Summary, error)
+	Pages(context.Context, string, storage.PageQuery) (storage.PageResult, error)
+	Buckets(context.Context, string, int) ([]backend.BucketStat, error)
+}
+
 // Dependencies configure the API handler.
 type Dependencies struct {
 	Version       string
 	Tasks         TaskService
+	Analysis      AnalysisService
 	MaxInputBytes int64
 	UI            http.Handler
 }
@@ -128,6 +139,10 @@ func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, r
 	}
 	id := parts[0]
 	if len(parts) == 2 {
+		if request.Method == http.MethodGet {
+			s.handleAnalysis(writer, request, id, parts[1])
+			return
+		}
 		if request.Method != http.MethodPost {
 			methodNotAllowed(writer)
 			return
@@ -167,6 +182,86 @@ func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, r
 	default:
 		methodNotAllowed(writer)
 	}
+}
+
+func (s *server) handleAnalysis(writer http.ResponseWriter, request *http.Request, id, resource string) {
+	if s.dependencies.Analysis == nil {
+		writeError(writer, http.StatusNotFound, "NOT_FOUND", "analysis resource not found")
+		return
+	}
+	switch resource {
+	case "overview", "space-composition":
+		summary, err := s.dependencies.Analysis.Summary(request.Context(), id)
+		if err != nil {
+			writeOperationError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, summary)
+	case "pages":
+		query, page, pageSize, err := parsePageQuery(request)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid page query")
+			return
+		}
+		result, err := s.dependencies.Analysis.Pages(request.Context(), id, query)
+		if err != nil {
+			writeOperationError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"items": result.Items, "total": result.Total, "page": page, "pageSize": pageSize})
+	case "buckets":
+		limit := 100
+		if raw := request.URL.Query().Get("limit"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 1 || parsed > 500 {
+				writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid bucket limit")
+				return
+			}
+			limit = parsed
+		}
+		items, err := s.dependencies.Analysis.Buckets(request.Context(), id, limit)
+		if err != nil {
+			writeOperationError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"items": items})
+	default:
+		writeError(writer, http.StatusNotFound, "NOT_FOUND", "analysis resource not found")
+	}
+}
+
+func parsePageQuery(request *http.Request) (storage.PageQuery, int, int, error) {
+	values := request.URL.Query()
+	page, pageSize := 1, 100
+	var err error
+	if raw := values.Get("page"); raw != "" {
+		page, err = strconv.Atoi(raw)
+		if err != nil || page < 1 {
+			return storage.PageQuery{}, 0, 0, fmt.Errorf("invalid page")
+		}
+	}
+	if raw := values.Get("pageSize"); raw != "" {
+		pageSize, err = strconv.Atoi(raw)
+		if err != nil || pageSize < 1 || pageSize > 500 {
+			return storage.PageQuery{}, 0, 0, fmt.Errorf("invalid page size")
+		}
+	}
+	sortName := values.Get("sort")
+	if sortName == "" {
+		sortName = "page_id"
+	}
+	allowedSorts := map[string]bool{"page_id": true, "total_bytes": true, "utilization": true}
+	if !allowedSorts[sortName] {
+		return storage.PageQuery{}, 0, 0, fmt.Errorf("invalid sort")
+	}
+	order := values.Get("order")
+	if order != "" && order != "asc" && order != "desc" {
+		return storage.PageQuery{}, 0, 0, fmt.Errorf("invalid order")
+	}
+	return storage.PageQuery{
+		Type: values.Get("type"), Sort: sortName, Desc: order == "desc",
+		Limit: pageSize, Offset: (page - 1) * pageSize,
+	}, page, pageSize, nil
 }
 
 func ensureJSONEnd(decoder *json.Decoder) error {

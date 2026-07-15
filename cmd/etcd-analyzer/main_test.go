@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -53,7 +55,17 @@ func (w *listeningWriter) Write(contents []byte) (int, error) {
 func TestRunAnalyzeImportsTask(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "input.db")
-	if err := os.WriteFile(source, []byte("fixture"), 0o600); err != nil {
+	db, err := bolt.Open(source, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucket([]byte("key"))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	output := filepath.Join(root, "data")

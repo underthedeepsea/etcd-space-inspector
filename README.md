@@ -1,6 +1,6 @@
 # ETCD DBSize Analyzer
 
-ETCD DBSize Analyzer 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前分支为 M1 `0.1.0`：可安全导入 snapshot/raw DB、计算 SHA-256、管理可取消任务，并通过本地 Web UI 查看状态。
+ETCD DBSize Analyzer 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前分支为 M2 `0.2.0`：除安全导入和任务管理外，还能只读分析 bbolt 文件/Page/空闲空间与 Bucket 占用，并通过本地 Web UI 下钻。
 
 ## 构建
 
@@ -68,11 +68,17 @@ analysis-data/
 - `POST /api/v1/tasks/{id}/start`
 - `POST /api/v1/tasks/{id}/cancel`
 - `DELETE /api/v1/tasks/{id}`
+- `GET /api/v1/tasks/{id}/overview`
+- `GET /api/v1/tasks/{id}/space-composition`
+- `GET /api/v1/tasks/{id}/pages`
+- `GET /api/v1/tasks/{id}/buckets`
 
 任务 JSON 请求采用严格字段校验。进程重启时，遗留的 `running` 任务会被标为 `TASK_INTERRUPTED`，不会伪装成仍在运行。
 
 ## 当前边界
 
-`0.1.0` 只完成 M1 工程骨架、任务导入和状态管理。bbolt 页面/Bucket 分析在 `0.2.0`（M2）交付，etcd 3.4 MVCC revision、tombstone、Prefix 与 Top Key 在 `0.3.0`（M3）交付。
+`0.2.0` 已完成 M1 工程骨架以及 M2 Generic bbolt 分析。页面类型来自 bbolt 公开的只读 Page API；Bucket 分配/使用量来自 `Bucket.Stats`，因此属于离线估算值。损坏或无法打开的文件分别保留稳定的任务错误证据，源文件不会被修改。
+
+etcd 3.4 MVCC revision、tombstone、Prefix 与 Top Key 在 `0.3.0`（M3）交付。未确认 etcd 版本时，系统只输出 Generic bbolt 结论，不猜测 MVCC 语义。
 
 本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，也不会持久化原始 Value。

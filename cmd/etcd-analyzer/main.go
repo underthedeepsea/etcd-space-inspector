@@ -75,13 +75,14 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "warning: listening on non-loopback address %s\n", settings.Server.Listen)
 	}
 
-	application := app.New(settings.Server.DataDir, nil)
+	application := app.NewM2(settings.Server.DataDir, settings.Analysis.SQLiteBatchSize)
 	if err := application.RecoverInterrupted(ctx); err != nil {
 		fmt.Fprintf(stderr, "recover interrupted tasks: %v\n", err)
 		return 1
 	}
 	handler := api.New(api.Dependencies{
-		Version: version.Value, Tasks: application, MaxInputBytes: settings.Security.MaxInputBytes, UI: web.Handler(),
+		Version: version.Value, Tasks: application, Analysis: application,
+		MaxInputBytes: settings.Security.MaxInputBytes, UI: web.Handler(),
 	})
 	listener, err := net.Listen("tcp", settings.Server.Listen)
 	if err != nil {
@@ -180,7 +181,8 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	repository := &manifestRepository{database: database, manifests: manifests}
-	if err := task.NewRunner(repository, nil).Start(ctx, item.ID); err != nil {
+	stages := []task.Stage{app.PhysicalStage(manifests, 1000)}
+	if err := task.NewRunner(repository, stages).Start(ctx, item.ID); err != nil {
 		fmt.Fprintf(stderr, "analyze task: %v\n", err)
 		return 1
 	}

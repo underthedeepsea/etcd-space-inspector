@@ -43,3 +43,21 @@ func Open(path string) (*sql.DB, error) {
 	}
 	return db, nil
 }
+
+// OpenReadOnly opens an existing task database without applying migrations.
+func OpenReadOnly(path string) (*sql.DB, error) {
+	query := url.Values{}
+	query.Set("mode", "ro")
+	query.Add("_pragma", "busy_timeout(5000)")
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: query.Encode()}).String()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite read-only: %w", err)
+	}
+	db.SetMaxOpenConns(4)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping sqlite read-only: %w", err)
+	}
+	return db, nil
+}
