@@ -1,19 +1,55 @@
 // Package mvcc defines Value-free MVCC analysis records.
 package mvcc
 
-// Revision contains persisted metadata for one etcd revision.
-type Revision struct {
-	KeyHash        string `json:"keyHash"`
-	KeyText        string `json:"keyText"`
-	KeyBytes       int64  `json:"keyBytes"`
-	MainRevision   int64  `json:"mainRevision"`
-	SubRevision    int64  `json:"subRevision"`
-	CreateRevision int64  `json:"createRevision"`
-	ModRevision    int64  `json:"modRevision"`
-	Version        int64  `json:"version"`
-	LeaseID        int64  `json:"leaseId"`
-	ValueBytes     int64  `json:"valueBytes"`
-	StoredBytes    int64  `json:"storedBytes"`
-	Tombstone      bool   `json:"tombstone"`
-	ValueHash      string `json:"valueHash"`
+import "etcd-analyzer/internal/mvcc/etcd34"
+
+// Revision is the Value-free record emitted by the active schema adapter.
+type Revision = etcd34.Revision
+
+// KeyRecord separates the current revision from history and tombstones.
+type KeyRecord struct {
+	ID                      int64   `json:"id"`
+	KeyHash                 string  `json:"keyHash"`
+	KeyText                 string  `json:"keyText"`
+	Prefix                  string  `json:"prefix"`
+	Present                 bool    `json:"present"`
+	CreateRevision          int64   `json:"createRevision"`
+	ModRevision             int64   `json:"modRevision"`
+	Version                 int64   `json:"version"`
+	LeaseID                 int64   `json:"leaseId"`
+	CurrentKeyBytes         int64   `json:"currentKeyBytes"`
+	CurrentValueBytes       int64   `json:"currentValueBytes"`
+	CurrentStoredBytes      int64   `json:"currentStoredBytes"`
+	HistoricalVersions      int64   `json:"historicalVersions"`
+	HistoricalBytes         int64   `json:"historicalBytes"`
+	TombstoneCount          int64   `json:"tombstoneCount"`
+	TombstoneBytes          int64   `json:"tombstoneBytes"`
+	RevisionCount           int64   `json:"revisionCount"`
+	HistoricalAmplification float64 `json:"historicalAmplification"`
+}
+
+// PrefixStat aggregates key storage along slash-delimited ancestors.
+type PrefixStat struct {
+	Prefix             string `json:"prefix"`
+	Depth              int64  `json:"depth"`
+	CurrentKeyCount    int64  `json:"currentKeyCount"`
+	CurrentValueBytes  int64  `json:"currentValueBytes"`
+	HistoricalVersions int64  `json:"historicalVersions"`
+	HistoricalBytes    int64  `json:"historicalBytes"`
+	TombstoneCount     int64  `json:"tombstoneCount"`
+	TombstoneBytes     int64  `json:"tombstoneBytes"`
+	MaxValueBytes      int64  `json:"maxValueBytes"`
+}
+
+// Summary contains task-level MVCC totals.
+type Summary struct {
+	SemanticAvailable  bool  `json:"semanticAvailable"`
+	RevisionCount      int64 `json:"revisionCount"`
+	DecodeErrors       int64 `json:"decodeErrors"`
+	CurrentKeyCount    int64 `json:"currentKeyCount"`
+	CurrentStoredBytes int64 `json:"currentStoredBytes"`
+	HistoricalVersions int64 `json:"historicalVersions"`
+	HistoricalBytes    int64 `json:"historicalBytes"`
+	TombstoneCount     int64 `json:"tombstoneCount"`
+	TombstoneBytes     int64 `json:"tombstoneBytes"`
 }

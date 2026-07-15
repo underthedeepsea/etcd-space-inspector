@@ -5,6 +5,7 @@ go 1.19
 require (
 	go.etcd.io/bbolt v1.3.8
 	go.etcd.io/etcd/api/v3 v3.5.9
+	golang.org/x/sync v0.5.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.28.0
 )

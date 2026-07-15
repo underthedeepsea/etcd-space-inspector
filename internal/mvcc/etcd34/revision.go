@@ -7,11 +7,27 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	"etcd-analyzer/internal/mvcc"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 )
 
 const revisionKeyLength = 17
+
+// Revision contains persisted metadata for one etcd revision and no Value field.
+type Revision struct {
+	KeyHash        string `json:"keyHash"`
+	KeyText        string `json:"keyText"`
+	KeyBytes       int64  `json:"keyBytes"`
+	MainRevision   int64  `json:"mainRevision"`
+	SubRevision    int64  `json:"subRevision"`
+	CreateRevision int64  `json:"createRevision"`
+	ModRevision    int64  `json:"modRevision"`
+	Version        int64  `json:"version"`
+	LeaseID        int64  `json:"leaseId"`
+	ValueBytes     int64  `json:"valueBytes"`
+	StoredBytes    int64  `json:"storedBytes"`
+	Tombstone      bool   `json:"tombstone"`
+	ValueHash      string `json:"valueHash"`
+}
 
 // DecodeRevisionKey decodes the etcd 3.4 backend revision key format.
 func DecodeRevisionKey(value []byte) (main, sub int64, tombstone bool, err error) {
@@ -36,14 +52,14 @@ func DecodeRevisionKey(value []byte) (main, sub int64, tombstone bool, err error
 }
 
 // DecodeRecord converts etcd protobuf bytes into metadata without retaining Value.
-func DecodeRecord(revisionKey, encodedValue []byte) (mvcc.Revision, error) {
+func DecodeRecord(revisionKey, encodedValue []byte) (Revision, error) {
 	main, sub, tombstone, err := DecodeRevisionKey(revisionKey)
 	if err != nil {
-		return mvcc.Revision{}, err
+		return Revision{}, err
 	}
 	var keyValue mvccpb.KeyValue
 	if err := keyValue.Unmarshal(encodedValue); err != nil {
-		return mvcc.Revision{}, fmt.Errorf("decode mvcc key-value: %w", err)
+		return Revision{}, fmt.Errorf("decode mvcc key-value: %w", err)
 	}
 	keyHash := sha256.Sum256(keyValue.Key)
 	valueHash := sha256.Sum256(keyValue.Value)
@@ -51,7 +67,7 @@ func DecodeRecord(revisionKey, encodedValue []byte) (mvcc.Revision, error) {
 	if !utf8.Valid(keyValue.Key) {
 		keyText = "hex:" + hex.EncodeToString(keyValue.Key)
 	}
-	return mvcc.Revision{
+	return Revision{
 		KeyHash: hex.EncodeToString(keyHash[:]), KeyText: keyText, KeyBytes: int64(len(keyValue.Key)),
 		MainRevision: main, SubRevision: sub, CreateRevision: keyValue.CreateRevision,
 		ModRevision: keyValue.ModRevision, Version: keyValue.Version, LeaseID: keyValue.Lease,
