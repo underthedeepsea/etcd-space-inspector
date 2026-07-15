@@ -32,6 +32,7 @@ type Dependencies struct {
 	Version       string
 	Tasks         TaskService
 	MaxInputBytes int64
+	UI            http.Handler
 }
 
 type server struct {
@@ -62,6 +63,14 @@ func (s *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	const prefix = "/api/v1/tasks/"
 	if strings.HasPrefix(request.URL.Path, prefix) {
 		s.handleTask(writer, request, strings.TrimPrefix(request.URL.Path, prefix))
+		return
+	}
+	if strings.HasPrefix(request.URL.Path, "/api/") {
+		writeError(writer, http.StatusNotFound, "NOT_FOUND", "resource not found")
+		return
+	}
+	if s.dependencies.UI != nil && request.Method == http.MethodGet {
+		s.dependencies.UI.ServeHTTP(writer, request)
 		return
 	}
 	writeError(writer, http.StatusNotFound, "NOT_FOUND", "resource not found")

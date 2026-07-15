@@ -19,6 +19,7 @@ import (
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 	"etcd-analyzer/internal/version"
+	"etcd-analyzer/web"
 )
 
 func main() {
@@ -76,7 +77,7 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 
 	application := app.New(settings.Server.DataDir, nil)
 	handler := api.New(api.Dependencies{
-		Version: version.Value, Tasks: application, MaxInputBytes: settings.Security.MaxInputBytes,
+		Version: version.Value, Tasks: application, MaxInputBytes: settings.Security.MaxInputBytes, UI: web.Handler(),
 	})
 	listener, err := net.Listen("tcp", settings.Server.Listen)
 	if err != nil {

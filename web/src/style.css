@@ -1,0 +1,30 @@
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #17221d; background: #eef2ee; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input, select { font: inherit; }
+button { border: 1px solid #214f3b; border-radius: .45rem; padding: .55rem .8rem; background: #276448; color: white; cursor: pointer; }
+button:hover { background: #1f523b; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #62a8ff; outline-offset: 2px; }
+button:disabled { cursor: wait; opacity: .55; }
+.shell { width: min(1180px, calc(100% - 2rem)); margin: 0 auto; padding: 3rem 0; }
+header { margin-bottom: 2rem; }
+h1 { margin: .25rem 0; font-size: clamp(2rem, 5vw, 3.6rem); letter-spacing: -.04em; }
+h2 { margin: 0 0 1rem; }
+.eyebrow { color: #276448; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
+.panel { background: white; border: 1px solid #d5ddd7; border-radius: .8rem; padding: 1.25rem; box-shadow: 0 8px 24px rgb(27 50 38 / 7%); }
+.task-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: .8rem; align-items: end; }
+label { display: grid; gap: .35rem; font-size: .85rem; font-weight: 700; }
+input, select { min-width: 0; border: 1px solid #aab7ad; border-radius: .4rem; padding: .55rem; background: white; color: inherit; }
+.status { min-height: 1.5rem; color: #4a5e53; }
+.section-title { display: flex; justify-content: space-between; align-items: center; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: .75rem; border-top: 1px solid #e1e7e2; text-align: left; white-space: nowrap; }
+th { color: #526158; font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; }
+td small { display: block; margin-top: .25rem; color: #69796f; font-family: ui-monospace, monospace; }
+.badge { display: inline-block; border-radius: 999px; padding: .2rem .55rem; background: #e7ece8; }
+.badge.completed { background: #d9f2df; color: #17552c; }.badge.failed { background: #ffe0de; color: #7a211b; }.badge.running { background: #dbeaff; color: #214c7a; }
+.actions { display: flex; gap: .4rem; }.danger { background: white; color: #912f27; border-color: #c88680; }.empty { padding: 2rem; text-align: center; color: #66756c; }
+progress { width: 7rem; accent-color: #276448; }
+@media (max-width: 900px) { .task-form { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .task-form { grid-template-columns: 1fr; }.shell { padding-top: 1.5rem; } }

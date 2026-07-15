@@ -61,6 +61,24 @@ func TestTaskActionsAndStrictJSON(t *testing.T) {
 	}
 }
 
+func TestSPAHandlesOnlyNonAPIGETRoutes(t *testing.T) {
+	ui := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("ui"))
+	})
+	h := New(Dependencies{Version: "0.1.0", Tasks: &fakeTasks{}, MaxInputBytes: 1024, UI: ui})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/tasks/demo", nil))
+	if rr.Code != http.StatusOK || rr.Body.String() != "ui" {
+		t.Fatalf("status=%d body=%q", rr.Code, rr.Body.String())
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/unknown", nil))
+	if rr.Code != http.StatusNotFound || strings.Contains(rr.Body.String(), "ui") {
+		t.Fatalf("status=%d body=%q", rr.Code, rr.Body.String())
+	}
+}
+
 type fakeTasks struct {
 	items   []task.Task
 	created task.CreateRequest
