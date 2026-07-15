@@ -1,2 +1,4 @@
 /etcd-dbsize-analyzer-codex-development-guide.md
 /.worktrees/
+/bin/
+/analysis-data/
