@@ -45,7 +45,11 @@ func (r *MVCCRepository) ResetMVCC(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("begin MVCC reset: %w", err)
 	}
-	for _, table := range []string{"mvcc_summaries", "prefix_stats", "key_records", "revision_records"} {
+	for _, table := range []string{
+		"kube_diff_records", "kube_field_records", "kube_revision_records", "kube_object_records",
+		"kube_resource_stats", "kube_namespace_stats", "kube_summaries",
+		"mvcc_summaries", "prefix_stats", "key_records", "revision_records",
+	} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE task_id = ?", r.taskID); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("reset %s: %w", table, err)
@@ -191,8 +195,8 @@ func (r *MVCCRepository) RevisionsByKeyID(ctx context.Context, id int64, limit, 
 	return r.Revisions(ctx, item.KeyHash, limit, offset)
 }
 
-// StoreRevisions appends one bounded writer batch.
-func (r *MVCCRepository) StoreRevisions(ctx context.Context, revisions []mvcc.Revision) error {
+// StoreRecords appends one bounded MVCC and Kubernetes writer batch.
+func (r *MVCCRepository) StoreRecords(ctx context.Context, records []mvcc.Record) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin revision batch: %w", err)
@@ -207,7 +211,8 @@ INSERT INTO revision_records (
 		return fmt.Errorf("prepare revision batch: %w", err)
 	}
 	defer statement.Close()
-	for _, revision := range revisions {
+	for _, record := range records {
+		revision := record.Revision
 		if _, err := statement.ExecContext(ctx, r.taskID, revision.KeyHash, revision.KeyText, revision.KeyBytes,
 			revision.MainRevision, revision.SubRevision, revision.CreateRevision, revision.ModRevision,
 			revision.Version, revision.LeaseID, revision.ValueBytes, revision.StoredBytes,
@@ -215,11 +220,24 @@ INSERT INTO revision_records (
 			tx.Rollback()
 			return fmt.Errorf("insert revision: %w", err)
 		}
+		if err := insertKubeRecord(ctx, tx, r.taskID, record.Kubernetes); err != nil {
+			tx.Rollback()
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit revision batch: %w", err)
 	}
 	return nil
+}
+
+// StoreRevisions preserves the M3 repository API for direct callers.
+func (r *MVCCRepository) StoreRevisions(ctx context.Context, revisions []mvcc.Revision) error {
+	records := make([]mvcc.Record, len(revisions))
+	for index, revision := range revisions {
+		records[index].Revision = revision
+	}
+	return r.StoreRecords(ctx, records)
 }
 
 // Revisions returns ordered Value-free history for one key.

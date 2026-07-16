@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"etcd-analyzer/internal/kube"
 	"etcd-analyzer/internal/mvcc/etcd34"
 	bolt "go.etcd.io/bbolt"
 	"golang.org/x/sync/errgroup"
@@ -19,7 +20,7 @@ var ErrSemanticUnavailable = errors.New("semantic decode unavailable")
 // RevisionSink is the single-writer persistence boundary.
 type RevisionSink interface {
 	ResetMVCC(context.Context) error
-	StoreRevisions(context.Context, []Revision) error
+	StoreRecords(context.Context, []Record) error
 }
 
 // PipelineStats records streaming outcomes without retaining records.
@@ -72,7 +73,8 @@ func (p *Pipeline) Run(ctx context.Context, sourcePath, version string, sink Rev
 			return fmt.Errorf("%w: key bucket missing", ErrSemanticUnavailable)
 		}
 		rawChannel := make(chan rawRecord, p.channelSize)
-		decodedChannel := make(chan Revision, p.channelSize)
+		decodedChannel := make(chan Record, p.channelSize)
+		semanticAnalyzer := kube.NewAnalyzer()
 		group, groupContext := errgroup.WithContext(ctx)
 		group.Go(func() error {
 			defer close(rawChannel)
@@ -94,7 +96,7 @@ func (p *Pipeline) Run(ctx context.Context, sourcePath, version string, sink Rev
 			group.Go(func() error {
 				defer workers.Done()
 				for raw := range rawChannel {
-					record, err := etcd34.DecodeRecord(raw.key, raw.value)
+					record, err := etcd34.DecodeRecordWithAnalyzer(raw.key, raw.value, semanticAnalyzer)
 					if err != nil {
 						atomic.AddInt64(&decodeErrors, 1)
 						continue
@@ -102,7 +104,7 @@ func (p *Pipeline) Run(ctx context.Context, sourcePath, version string, sink Rev
 					select {
 					case decodedChannel <- record:
 						atomic.AddInt64(&decoded, 1)
-						if record.Tombstone {
+						if record.Revision.Tombstone {
 							atomic.AddInt64(&tombstones, 1)
 						}
 					case <-groupContext.Done():
@@ -118,18 +120,18 @@ func (p *Pipeline) Run(ctx context.Context, sourcePath, version string, sink Rev
 			return nil
 		})
 		group.Go(func() error {
-			batch := make([]Revision, 0, p.batchSize)
+			batch := make([]Record, 0, p.batchSize)
 			for record := range decodedChannel {
 				batch = append(batch, record)
 				if len(batch) == cap(batch) {
-					if err := sink.StoreRevisions(groupContext, batch); err != nil {
+					if err := sink.StoreRecords(groupContext, batch); err != nil {
 						return err
 					}
-					batch = make([]Revision, 0, p.batchSize)
+					batch = make([]Record, 0, p.batchSize)
 				}
 			}
 			if len(batch) > 0 {
-				return sink.StoreRevisions(groupContext, batch)
+				return sink.StoreRecords(groupContext, batch)
 			}
 			return nil
 		})

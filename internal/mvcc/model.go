@@ -6,6 +6,9 @@ import "etcd-analyzer/internal/mvcc/etcd34"
 // Revision is the Value-free record emitted by the active schema adapter.
 type Revision = etcd34.Revision
 
+// Record is the Value-free unit passed from decoder workers to the SQLite writer.
+type Record = etcd34.SafeRecord
+
 // KeyRecord separates the current revision from history and tombstones.
 type KeyRecord struct {
 	ID                      int64   `json:"id"`

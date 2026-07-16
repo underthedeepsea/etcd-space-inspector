@@ -20,14 +20,14 @@ func TestPipelineDecodesBoundedBatchesWithoutPlaintext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Scanned != 4 || stats.Decoded != 4 || stats.Tombstones != 1 || len(sink.records) != 4 {
+	if stats.Scanned != 4 || stats.Decoded != 4 || stats.Tombstones != 1 || len(sink.records) != 4 || sink.kubernetes != 2 {
 		t.Fatalf("stats=%+v records=%+v", stats, sink.records)
 	}
 	serialized, err := json.Marshal(sink.records)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, plaintext := range []string{"old-value", "new-value", "deleted-value"} {
+	for _, plaintext := range []string{"super-secret-old", "super-secret-value", "deleted-value"} {
 		if contains(serialized, []byte(plaintext)) {
 			t.Fatalf("plaintext %q retained", plaintext)
 		}
@@ -58,8 +58,8 @@ func createMVCCFixture(t *testing.T) string {
 			tombstone bool
 			kv        *mvccpb.KeyValue
 		}{
-			{1, 0, false, &mvccpb.KeyValue{Key: []byte("/a/x"), CreateRevision: 1, ModRevision: 1, Version: 1, Value: []byte("old-value")}},
-			{2, 0, false, &mvccpb.KeyValue{Key: []byte("/a/x"), CreateRevision: 1, ModRevision: 2, Version: 2, Value: []byte("new-value")}},
+			{1, 0, false, &mvccpb.KeyValue{Key: []byte("/registry/example.io/widgets/default/demo"), CreateRevision: 1, ModRevision: 1, Version: 1, Value: []byte(`{"apiVersion":"example.io/v1","kind":"Widget","spec":{"token":"super-secret-old"}}`)}},
+			{2, 0, false, &mvccpb.KeyValue{Key: []byte("/registry/example.io/widgets/default/demo"), CreateRevision: 1, ModRevision: 2, Version: 2, Value: []byte(`{"apiVersion":"example.io/v1","kind":"Widget","spec":{"token":"super-secret-value"}}`)}},
 			{3, 0, false, &mvccpb.KeyValue{Key: []byte("/a/y"), CreateRevision: 3, ModRevision: 3, Version: 1, Value: []byte("deleted-value")}},
 			{4, 0, true, &mvccpb.KeyValue{Key: []byte("/a/y"), ModRevision: 4}},
 		}
@@ -95,11 +95,19 @@ func revisionKey(main, sub int64, tombstone bool) []byte {
 	return key
 }
 
-type revisionSink struct{ records []mvcc.Revision }
+type revisionSink struct {
+	records    []mvcc.Record
+	kubernetes int
+}
 
 func (s *revisionSink) ResetMVCC(context.Context) error { s.records = nil; return nil }
-func (s *revisionSink) StoreRevisions(_ context.Context, records []mvcc.Revision) error {
+func (s *revisionSink) StoreRecords(_ context.Context, records []mvcc.Record) error {
 	s.records = append(s.records, records...)
+	for _, record := range records {
+		if record.Kubernetes != nil {
+			s.kubernetes++
+		}
+	}
 	return nil
 }
 

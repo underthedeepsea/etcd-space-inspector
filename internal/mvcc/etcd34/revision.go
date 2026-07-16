@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"unicode/utf8"
 
+	"etcd-analyzer/internal/kube"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 )
 
@@ -27,6 +28,12 @@ type Revision struct {
 	StoredBytes    int64  `json:"storedBytes"`
 	Tombstone      bool   `json:"tombstone"`
 	ValueHash      string `json:"valueHash"`
+}
+
+// SafeRecord combines MVCC metadata with optional Value-free Kubernetes semantics.
+type SafeRecord struct {
+	Revision   Revision             `json:"revision"`
+	Kubernetes *kube.ObjectRevision `json:"kubernetes,omitempty"`
 }
 
 // DecodeRevisionKey decodes the etcd 3.4 backend revision key format.
@@ -53,13 +60,23 @@ func DecodeRevisionKey(value []byte) (main, sub int64, tombstone bool, err error
 
 // DecodeRecord converts etcd protobuf bytes into metadata without retaining Value.
 func DecodeRecord(revisionKey, encodedValue []byte) (Revision, error) {
+	record, err := decodeRecord(revisionKey, encodedValue, nil)
+	return record.Revision, err
+}
+
+// DecodeRecordWithAnalyzer derives Kubernetes semantics before releasing the raw Value.
+func DecodeRecordWithAnalyzer(revisionKey, encodedValue []byte, analyzer *kube.Analyzer) (SafeRecord, error) {
+	return decodeRecord(revisionKey, encodedValue, analyzer)
+}
+
+func decodeRecord(revisionKey, encodedValue []byte, analyzer *kube.Analyzer) (SafeRecord, error) {
 	main, sub, tombstone, err := DecodeRevisionKey(revisionKey)
 	if err != nil {
-		return Revision{}, err
+		return SafeRecord{}, err
 	}
 	var keyValue mvccpb.KeyValue
 	if err := keyValue.Unmarshal(encodedValue); err != nil {
-		return Revision{}, fmt.Errorf("decode mvcc key-value: %w", err)
+		return SafeRecord{}, fmt.Errorf("decode mvcc key-value: %w", err)
 	}
 	keyHash := sha256.Sum256(keyValue.Key)
 	valueHash := sha256.Sum256(keyValue.Value)
@@ -67,11 +84,21 @@ func DecodeRecord(revisionKey, encodedValue []byte) (Revision, error) {
 	if !utf8.Valid(keyValue.Key) {
 		keyText = "hex:" + hex.EncodeToString(keyValue.Key)
 	}
-	return Revision{
+	revision := Revision{
 		KeyHash: hex.EncodeToString(keyHash[:]), KeyText: keyText, KeyBytes: int64(len(keyValue.Key)),
 		MainRevision: main, SubRevision: sub, CreateRevision: keyValue.CreateRevision,
 		ModRevision: keyValue.ModRevision, Version: keyValue.Version, LeaseID: keyValue.Lease,
 		ValueBytes: int64(len(keyValue.Value)), StoredBytes: int64(len(revisionKey) + len(encodedValue)),
 		Tombstone: tombstone, ValueHash: hex.EncodeToString(valueHash[:]),
-	}, nil
+	}
+	result := SafeRecord{Revision: revision}
+	if analyzer != nil {
+		result.Kubernetes = analyzer.Analyze(keyValue.Key, revision.KeyHash, keyValue.Value)
+		if result.Kubernetes != nil {
+			result.Kubernetes.MainRevision = main
+			result.Kubernetes.SubRevision = sub
+		}
+	}
+	keyValue.Value = nil
+	return result, nil
 }

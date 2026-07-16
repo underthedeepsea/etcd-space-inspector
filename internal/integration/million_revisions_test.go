@@ -73,7 +73,7 @@ func (s *countingSink) ResetMVCC(context.Context) error {
 	return nil
 }
 
-func (s *countingSink) StoreRevisions(_ context.Context, revisions []mvcc.Revision) error {
-	s.count += int64(len(revisions))
+func (s *countingSink) StoreRecords(_ context.Context, records []mvcc.Record) error {
+	s.count += int64(len(records))
 	return nil
 }
