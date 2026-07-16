@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -10,8 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"etcd-analyzer/internal/analyzer"
 	"etcd-analyzer/internal/apperr"
 	backend "etcd-analyzer/internal/backend/bbolt"
+	"etcd-analyzer/internal/mvcc"
+	"etcd-analyzer/internal/report"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 )
@@ -39,6 +43,34 @@ func NewM2(dataDir string, batchSize int) *Application {
 	application := New(dataDir, nil)
 	application.stages = []task.Stage{PhysicalStage(application.manifests, batchSize)}
 	return application
+}
+
+// NewM3 creates an application with physical and version-gated MVCC analysis.
+func NewM3(dataDir string, batchSize, workers, channelSize int) *Application {
+	application := New(dataDir, nil)
+	application.stages = []task.Stage{
+		PhysicalStage(application.manifests, batchSize),
+		MVCCStage(application.manifests, workers, channelSize, batchSize),
+		ReportStage(application.manifests),
+	}
+	return application
+}
+
+// ReportStage writes the private standalone HTML summary after analysis.
+func ReportStage(manifests *task.Service) task.Stage {
+	return task.Stage{Name: "html-report", Run: func(ctx context.Context, taskContext *task.Context) error {
+		taskDir := manifests.TaskDir(taskContext.Task.ID)
+		db, err := storage.OpenReadOnly(filepath.Join(taskDir, "task.db"))
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		summary, err := buildReportSummary(ctx, db, *taskContext.Task)
+		if err != nil {
+			return err
+		}
+		return report.WriteFile(ctx, filepath.Join(taskDir, "exports", "report.html"), summary)
+	}}
 }
 
 // PhysicalStage creates the M2 read-only bbolt analysis stage.
@@ -70,6 +102,39 @@ func PhysicalStage(manifests *task.Service, batchSize int) task.Stage {
 			return err
 		}
 		return repository.SaveSummary(ctx, summary)
+	}}
+}
+
+// MVCCStage creates the M3 bounded etcd 3.4 semantic analysis stage.
+func MVCCStage(manifests *task.Service, workers, channelSize, batchSize int) task.Stage {
+	return task.Stage{Name: "mvcc-semantic", Run: func(ctx context.Context, taskContext *task.Context) error {
+		taskDir := manifests.TaskDir(taskContext.Task.ID)
+		sourcePath := filepath.Join(taskDir, filepath.Clean(taskContext.Task.SourcePath))
+		relative, err := filepath.Rel(taskDir, sourcePath)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("task source escapes task directory")
+		}
+		db, err := storage.Open(filepath.Join(taskDir, "task.db"))
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		repository := storage.NewMVCCRepository(db, taskContext.Task.ID)
+		stats, err := mvcc.NewPipeline(workers, channelSize, batchSize).Run(
+			ctx, sourcePath, taskContext.Task.EtcdVersion, repository)
+		if errors.Is(err, mvcc.ErrSemanticUnavailable) {
+			if resetErr := repository.ResetMVCC(ctx); resetErr != nil {
+				return resetErr
+			}
+			return repository.SaveUnavailable(ctx)
+		}
+		if err != nil {
+			return apperr.E("MVCC_DECODE_FAILED", "MVCC analysis failed", err)
+		}
+		if err := analyzer.Materialize(ctx, db, taskContext.Task.ID, batchSize); err != nil {
+			return err
+		}
+		return repository.SaveScanStats(ctx, stats)
 	}}
 }
 
@@ -232,6 +297,102 @@ func (a *Application) Buckets(ctx context.Context, id string, limit int) ([]back
 	}
 	defer db.Close()
 	return storage.NewBboltRepository(db, id).TopBuckets(ctx, limit)
+}
+
+// MVCCSummary returns M3 semantic totals or the explicit fallback state.
+func (a *Application) MVCCSummary(ctx context.Context, id string) (mvcc.Summary, error) {
+	db, err := storage.OpenReadOnly(a.databasePath(id))
+	if err != nil {
+		return mvcc.Summary{}, err
+	}
+	defer db.Close()
+	return storage.NewMVCCRepository(db, id).Summary(ctx)
+}
+
+// Keys returns one filtered page of M3 key aggregates.
+func (a *Application) Keys(ctx context.Context, id string, query storage.KeyQuery) (storage.KeyResult, error) {
+	db, err := storage.OpenReadOnly(a.databasePath(id))
+	if err != nil {
+		return storage.KeyResult{}, err
+	}
+	defer db.Close()
+	return storage.NewMVCCRepository(db, id).Keys(ctx, query)
+}
+
+// Key returns one M3 key aggregate.
+func (a *Application) Key(ctx context.Context, id string, keyID int64) (mvcc.KeyRecord, error) {
+	db, err := storage.OpenReadOnly(a.databasePath(id))
+	if err != nil {
+		return mvcc.KeyRecord{}, err
+	}
+	defer db.Close()
+	return storage.NewMVCCRepository(db, id).KeyByID(ctx, keyID)
+}
+
+// KeyRevisions returns Value-free revision metadata for a key.
+func (a *Application) KeyRevisions(ctx context.Context, id string, keyID int64, limit, offset int) ([]mvcc.Revision, error) {
+	db, err := storage.OpenReadOnly(a.databasePath(id))
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return storage.NewMVCCRepository(db, id).RevisionsByKeyID(ctx, keyID, limit, offset)
+}
+
+// Prefixes returns the largest M3 prefixes.
+func (a *Application) Prefixes(ctx context.Context, id string, limit int) ([]mvcc.PrefixStat, error) {
+	db, err := storage.OpenReadOnly(a.databasePath(id))
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return storage.NewMVCCRepository(db, id).TopPrefixes(ctx, limit)
+}
+
+// WriteReport atomically exports a standalone report for a completed task.
+func (a *Application) WriteReport(ctx context.Context, id, outputPath string) error {
+	item, err := a.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	db, err := storage.OpenReadOnly(a.databasePath(id))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	summary, err := buildReportSummary(ctx, db, item)
+	if err != nil {
+		return err
+	}
+	return report.WriteFile(ctx, outputPath, summary)
+}
+
+func buildReportSummary(ctx context.Context, db *sql.DB, item task.Task) (report.Summary, error) {
+	physical, err := storage.NewBboltRepository(db, item.ID).Summary(ctx)
+	if err != nil {
+		return report.Summary{}, err
+	}
+	repository := storage.NewMVCCRepository(db, item.ID)
+	semantic, err := repository.Summary(ctx)
+	if err != nil {
+		return report.Summary{}, err
+	}
+	current, err := repository.Keys(ctx, storage.KeyQuery{Sort: "current_bytes", Desc: true, Limit: 20})
+	if err != nil {
+		return report.Summary{}, err
+	}
+	historical, err := repository.Keys(ctx, storage.KeyQuery{Sort: "historical_bytes", Desc: true, Limit: 20})
+	if err != nil {
+		return report.Summary{}, err
+	}
+	prefixes, err := repository.TopPrefixes(ctx, 20)
+	if err != nil {
+		return report.Summary{}, err
+	}
+	return report.Summary{
+		Task: item, Physical: physical, MVCC: semantic,
+		TopCurrentKeys: current.Items, TopHistoricalKeys: historical.Items, TopPrefixes: prefixes,
+	}, nil
 }
 
 func (a *Application) databasePath(id string) string {

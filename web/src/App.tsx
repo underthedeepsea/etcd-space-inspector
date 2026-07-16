@@ -4,11 +4,21 @@ import {
   cancelTask,
   createTask,
   deleteTask,
+  getMVCCSummary,
   getOverview,
+  KeyFilters,
+  KeyRecord,
+  KeyResult,
   listBuckets,
+  listKeyRevisions,
+  listKeys,
   listPages,
+  listPrefixes,
   listTasks,
+  MVCCSummary,
   PageResult,
+  PrefixStat,
+  RevisionRecord,
   SpaceSummary,
   startTask,
   Task,
@@ -181,8 +191,86 @@ function PhysicalAnalysis({ taskId, onClose }: { taskId: string; onClose: () => 
         <tbody>{pages?.items.map((item) => <tr key={item.pageId}><td>{item.pageId}</td><td>{item.pageType}</td><td>{item.overflow}</td><td>{formatBytes(item.totalBytes)}</td><td>{Math.round(item.utilization * 100)}%</td></tr>)}</tbody>
       </table></div>
       <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button><span>Page {page} · {pages?.total ?? 0} records</span><button disabled={!pages || page * pages.pageSize >= pages.total} onClick={() => setPage((value) => value + 1)}>Next</button></div>
+      <SemanticAnalysis taskId={taskId} />
     </section>
   );
+}
+
+const initialKeyFilters: KeyFilters = { prefix: '', minSize: '', minRevisions: '', tombstone: false, sort: 'historical_bytes' };
+
+function SemanticAnalysis({ taskId }: { taskId: string }) {
+  const [summary, setSummary] = useState<MVCCSummary | null>(null);
+  const [prefixes, setPrefixes] = useState<PrefixStat[]>([]);
+  const [keys, setKeys] = useState<KeyResult | null>(null);
+  const [filters, setFilters] = useState<KeyFilters>(initialKeyFilters);
+  const [page, setPage] = useState(1);
+  const [selectedKey, setSelectedKey] = useState<KeyRecord | null>(null);
+  const [revisions, setRevisions] = useState<RevisionRecord[]>([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([getMVCCSummary(taskId), listPrefixes(taskId), listKeys(taskId, page, filters)])
+      .then(([nextSummary, nextPrefixes, nextKeys]) => {
+        if (!active) return;
+        setSummary(nextSummary); setPrefixes(nextPrefixes); setKeys(nextKeys); setError('');
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error ? reason.message : 'Unable to load MVCC analysis');
+      });
+    return () => { active = false; };
+  }, [taskId, page, filters]);
+
+  async function inspect(key: KeyRecord) {
+    setSelectedKey(key);
+    try {
+      setRevisions(await listKeyRevisions(taskId, key.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to load revisions');
+    }
+  }
+
+  if (!summary && !error) return <p>Loading MVCC analysis…</p>;
+  return <div className="semantic">
+    <h3>MVCC history</h3>
+    {error && <p role="alert">{error}</p>}
+    {summary && !summary.semanticAvailable && <p className="notice">Semantic decoding was skipped because the source was not confirmed as etcd 3.4.x. Physical results remain valid.</p>}
+    {summary?.semanticAvailable && <>
+      <div className="metrics">
+        <Metric label="Current keys" value={String(summary.currentKeyCount)} />
+        <Metric label="Current stored" value={formatBytes(summary.currentStoredBytes)} />
+        <Metric label="Historical versions" value={String(summary.historicalVersions)} />
+        <Metric label="Historical bytes" value={formatBytes(summary.historicalBytes)} />
+        <Metric label="Tombstones" value={String(summary.tombstoneCount)} />
+      </div>
+
+      <h3>Top prefixes</h3>
+      <div className="table-wrap"><table><thead><tr><th>Prefix</th><th>Current keys</th><th>History</th><th>Tombstones</th></tr></thead>
+        <tbody>{prefixes.map((prefix) => <tr key={prefix.prefix}><td><code>{prefix.prefix}</code></td><td>{prefix.currentKeyCount}</td><td>{formatBytes(prefix.historicalBytes)}</td><td>{prefix.tombstoneCount}</td></tr>)}</tbody>
+      </table></div>
+
+      <div className="section-title"><h3>Keys</h3><button type="button" onClick={() => { setFilters(initialKeyFilters); setPage(1); }}>Reset filters</button></div>
+      <div className="filters">
+        <label>Prefix<input value={filters.prefix} onChange={(event) => { setFilters({ ...filters, prefix: event.target.value }); setPage(1); }} placeholder="/registry" /></label>
+        <label>Minimum bytes<input type="number" min="0" value={filters.minSize} onChange={(event) => { setFilters({ ...filters, minSize: event.target.value }); setPage(1); }} /></label>
+        <label>Minimum revisions<input type="number" min="0" value={filters.minRevisions} onChange={(event) => { setFilters({ ...filters, minRevisions: event.target.value }); setPage(1); }} /></label>
+        <label>Sort<select value={filters.sort} onChange={(event) => { setFilters({ ...filters, sort: event.target.value as KeyFilters['sort'] }); setPage(1); }}><option value="historical_bytes">Historical bytes</option><option value="current_bytes">Current bytes</option><option value="revision_count">Revisions</option><option value="tombstone_count">Tombstones</option><option value="key">Key</option></select></label>
+        <label className="check"><input type="checkbox" checked={filters.tombstone} onChange={(event) => { setFilters({ ...filters, tombstone: event.target.checked }); setPage(1); }} />Has tombstones</label>
+      </div>
+      <div className="table-wrap"><table><thead><tr><th>Key</th><th>Present</th><th>Current</th><th>History</th><th>Revisions</th><th>Tombstones</th><th></th></tr></thead>
+        <tbody>{keys?.items.map((key) => <tr key={key.id}><td><code>{key.keyText}</code></td><td>{key.present ? 'yes' : 'no'}</td><td>{formatBytes(key.currentStoredBytes)}</td><td>{formatBytes(key.historicalBytes)}</td><td>{key.revisionCount}</td><td>{key.tombstoneCount}</td><td><button type="button" onClick={() => void inspect(key)}>Revisions</button></td></tr>)}</tbody>
+      </table></div>
+      <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button><span>Page {page} · {keys?.total ?? 0} keys</span><button disabled={!keys || page * keys.pageSize >= keys.total} onClick={() => setPage((value) => value + 1)}>Next</button></div>
+
+      {selectedKey && <div className="drawer" role="region" aria-label="Key revision details">
+        <div className="section-title"><h3><code>{selectedKey.keyText}</code></h3><button type="button" onClick={() => { setSelectedKey(null); setRevisions([]); }}>Close</button></div>
+        <p className="hash">Key hash: {selectedKey.keyHash}</p>
+        <div className="table-wrap"><table><thead><tr><th>Main</th><th>Sub</th><th>Version</th><th>Stored bytes</th><th>Tombstone</th><th>Value hash</th></tr></thead>
+          <tbody>{revisions.map((revision) => <tr key={`${revision.mainRevision}-${revision.subRevision}`}><td>{revision.mainRevision}</td><td>{revision.subRevision}</td><td>{revision.version}</td><td>{formatBytes(revision.storedBytes)}</td><td>{revision.tombstone ? 'yes' : 'no'}</td><td><code>{revision.valueHash.slice(0, 16)}</code></td></tr>)}</tbody>
+        </table></div>
+      </div>}
+    </>}
+  </div>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

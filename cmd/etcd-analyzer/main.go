@@ -28,7 +28,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: etcd-analyzer <version|analyze|server>")
+		fmt.Fprintln(stderr, "usage: etcd-analyzer <version|analyze|report|server>")
 		return 2
 	}
 
@@ -38,6 +38,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "analyze":
 		return runAnalyze(args[1:], stdout, stderr)
+	case "report":
+		return runReport(args[1:], stdout, stderr)
 	case "server":
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -75,13 +77,14 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "warning: listening on non-loopback address %s\n", settings.Server.Listen)
 	}
 
-	application := app.NewM2(settings.Server.DataDir, settings.Analysis.SQLiteBatchSize)
+	application := app.NewM3(settings.Server.DataDir, settings.Analysis.SQLiteBatchSize,
+		settings.Analysis.WorkerCount, settings.Analysis.ChannelSize)
 	if err := application.RecoverInterrupted(ctx); err != nil {
 		fmt.Fprintf(stderr, "recover interrupted tasks: %v\n", err)
 		return 1
 	}
 	handler := api.New(api.Dependencies{
-		Version: version.Value, Tasks: application, Analysis: application,
+		Version: version.Value, Tasks: application, Analysis: application, MVCC: application,
 		MaxInputBytes: settings.Security.MaxInputBytes, UI: web.Handler(),
 	})
 	listener, err := net.Listen("tcp", settings.Server.Listen)
@@ -181,7 +184,16 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	repository := &manifestRepository{database: database, manifests: manifests}
-	stages := []task.Stage{app.PhysicalStage(manifests, 1000)}
+	settings, err := config.Load("")
+	if err != nil {
+		fmt.Fprintf(stderr, "load defaults: %v\n", err)
+		return 1
+	}
+	stages := []task.Stage{
+		app.PhysicalStage(manifests, settings.Analysis.SQLiteBatchSize),
+		app.MVCCStage(manifests, settings.Analysis.WorkerCount, settings.Analysis.ChannelSize, settings.Analysis.SQLiteBatchSize),
+		app.ReportStage(manifests),
+	}
 	if err := task.NewRunner(repository, stages).Start(ctx, item.ID); err != nil {
 		fmt.Fprintf(stderr, "analyze task: %v\n", err)
 		return 1
@@ -192,6 +204,30 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "%s %s\n", completed.ID, completed.Status)
+	return 0
+}
+
+func runReport(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("report", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	taskID := flags.String("task", "", "task ID")
+	dataDir := flags.String("data-dir", "./analysis-data", "analysis data directory")
+	output := flags.String("output", "", "output HTML path")
+	if err := flags.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if *taskID == "" || *output == "" {
+		fmt.Fprintln(stderr, "--task and --output are required")
+		return 2
+	}
+	if err := app.New(*dataDir, nil).WriteReport(context.Background(), *taskID, *output); err != nil {
+		fmt.Fprintf(stderr, "write report: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, *output)
 	return 0
 }
 

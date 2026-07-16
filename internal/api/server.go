@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	backend "etcd-analyzer/internal/backend/bbolt"
+	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 )
@@ -37,11 +38,21 @@ type AnalysisService interface {
 	Buckets(context.Context, string, int) ([]backend.BucketStat, error)
 }
 
+// MVCCService is the M3 Value-free semantic query boundary.
+type MVCCService interface {
+	MVCCSummary(context.Context, string) (mvcc.Summary, error)
+	Keys(context.Context, string, storage.KeyQuery) (storage.KeyResult, error)
+	Key(context.Context, string, int64) (mvcc.KeyRecord, error)
+	KeyRevisions(context.Context, string, int64, int, int) ([]mvcc.Revision, error)
+	Prefixes(context.Context, string, int) ([]mvcc.PrefixStat, error)
+}
+
 // Dependencies configure the API handler.
 type Dependencies struct {
 	Version       string
 	Tasks         TaskService
 	Analysis      AnalysisService
+	MVCC          MVCCService
 	MaxInputBytes int64
 	UI            http.Handler
 }
@@ -133,11 +144,18 @@ func (s *server) handleTasks(writer http.ResponseWriter, request *http.Request) 
 
 func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, remainder string) {
 	parts := strings.Split(remainder, "/")
-	if parts[0] == "" || len(parts) > 2 {
+	if parts[0] == "" {
 		writeError(writer, http.StatusNotFound, "NOT_FOUND", "resource not found")
 		return
 	}
 	id := parts[0]
+	if len(parts) >= 2 && request.Method == http.MethodGet && s.handleMVCC(writer, request, id, parts[1:]) {
+		return
+	}
+	if len(parts) > 2 {
+		writeError(writer, http.StatusNotFound, "NOT_FOUND", "resource not found")
+		return
+	}
 	if len(parts) == 2 {
 		if request.Method == http.MethodGet {
 			s.handleAnalysis(writer, request, id, parts[1])
@@ -182,6 +200,161 @@ func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, r
 	default:
 		methodNotAllowed(writer)
 	}
+}
+
+func (s *server) handleMVCC(writer http.ResponseWriter, request *http.Request, taskID string, parts []string) bool {
+	if len(parts) == 0 {
+		return false
+	}
+	known := parts[0] == "mvcc-summary" || parts[0] == "keys" || parts[0] == "prefixes"
+	if !known {
+		return false
+	}
+	if s.dependencies.MVCC == nil {
+		writeError(writer, http.StatusNotFound, "NOT_FOUND", "MVCC resource not found")
+		return true
+	}
+	switch {
+	case len(parts) == 1 && parts[0] == "mvcc-summary":
+		item, err := s.dependencies.MVCC.MVCCSummary(request.Context(), taskID)
+		if err != nil {
+			writeOperationError(writer, err)
+			return true
+		}
+		writeJSON(writer, http.StatusOK, item)
+	case len(parts) == 1 && parts[0] == "prefixes":
+		limit, err := boundedInt(request.URL.Query().Get("limit"), 100, 1, 500)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid prefix limit")
+			return true
+		}
+		items, err := s.dependencies.MVCC.Prefixes(request.Context(), taskID, limit)
+		if err != nil {
+			writeOperationError(writer, err)
+			return true
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"items": items})
+	case len(parts) == 1 && parts[0] == "keys":
+		s.handleKeys(writer, request, taskID)
+	case len(parts) == 2 && parts[0] == "keys":
+		keyID, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || keyID < 1 {
+			writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid key id")
+			return true
+		}
+		item, err := s.dependencies.MVCC.Key(request.Context(), taskID, keyID)
+		if err != nil {
+			writeOperationError(writer, err)
+			return true
+		}
+		writeJSON(writer, http.StatusOK, item)
+	case len(parts) == 3 && parts[0] == "keys" && parts[2] == "revisions":
+		keyID, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || keyID < 1 {
+			writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid key id")
+			return true
+		}
+		page, pageSize, err := pagination(request, 100)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid revision page")
+			return true
+		}
+		items, err := s.dependencies.MVCC.KeyRevisions(request.Context(), taskID, keyID, pageSize, (page-1)*pageSize)
+		if err != nil {
+			writeOperationError(writer, err)
+			return true
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"items": items, "page": page, "pageSize": pageSize})
+	default:
+		writeError(writer, http.StatusNotFound, "NOT_FOUND", "MVCC resource not found")
+	}
+	return true
+}
+
+func (s *server) handleKeys(writer http.ResponseWriter, request *http.Request, taskID string) {
+	query, page, pageSize, err := parseKeyQuery(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid key query")
+		return
+	}
+	result, err := s.dependencies.MVCC.Keys(request.Context(), taskID, query)
+	if err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"items": result.Items, "total": result.Total, "page": page, "pageSize": pageSize})
+}
+
+func parseKeyQuery(request *http.Request) (storage.KeyQuery, int, int, error) {
+	values := request.URL.Query()
+	page, pageSize, err := pagination(request, 100)
+	if err != nil {
+		return storage.KeyQuery{}, 0, 0, err
+	}
+	sortName := values.Get("sort")
+	if sortName == "" {
+		sortName = "historical_bytes"
+	}
+	allowedSorts := map[string]bool{
+		"key": true, "current_bytes": true, "historical_bytes": true,
+		"revision_count": true, "tombstone_count": true,
+	}
+	if !allowedSorts[sortName] {
+		return storage.KeyQuery{}, 0, 0, fmt.Errorf("invalid sort")
+	}
+	order := values.Get("order")
+	if order != "" && order != "asc" && order != "desc" {
+		return storage.KeyQuery{}, 0, 0, fmt.Errorf("invalid order")
+	}
+	minSize, err := boundedInt64(values.Get("minSize"), 0)
+	if err != nil {
+		return storage.KeyQuery{}, 0, 0, err
+	}
+	minRevisions, err := boundedInt64(values.Get("minRevisions"), 0)
+	if err != nil {
+		return storage.KeyQuery{}, 0, 0, err
+	}
+	tombstone := values.Get("tombstone")
+	if tombstone != "" && tombstone != "true" && tombstone != "false" {
+		return storage.KeyQuery{}, 0, 0, fmt.Errorf("invalid tombstone")
+	}
+	return storage.KeyQuery{
+		Prefix: values.Get("prefix"), MinSize: minSize, MinRevisions: minRevisions,
+		TombstoneOnly: tombstone == "true", Sort: sortName,
+		Desc:  order == "desc" || (order == "" && sortName != "key"),
+		Limit: pageSize, Offset: (page - 1) * pageSize,
+	}, page, pageSize, nil
+}
+
+func pagination(request *http.Request, defaultSize int) (int, int, error) {
+	page, err := boundedInt(request.URL.Query().Get("page"), 1, 1, int(^uint(0)>>1))
+	if err != nil {
+		return 0, 0, err
+	}
+	pageSize, err := boundedInt(request.URL.Query().Get("pageSize"), defaultSize, 1, 500)
+	return page, pageSize, err
+}
+
+func boundedInt(raw string, fallback, minimum, maximum int) (int, error) {
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < minimum || value > maximum {
+		return 0, fmt.Errorf("integer out of range")
+	}
+	return value, nil
+}
+
+func boundedInt64(raw string, fallback int64) (int64, error) {
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("integer out of range")
+	}
+	return value, nil
 }
 
 func (s *server) handleAnalysis(writer http.ResponseWriter, request *http.Request, id, resource string) {

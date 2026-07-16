@@ -67,6 +67,81 @@ export interface PageResult {
   pageSize: number;
 }
 
+export interface MVCCSummary {
+  semanticAvailable: boolean;
+  revisionCount: number;
+  decodeErrors: number;
+  currentKeyCount: number;
+  currentStoredBytes: number;
+  historicalVersions: number;
+  historicalBytes: number;
+  tombstoneCount: number;
+  tombstoneBytes: number;
+}
+
+export interface KeyRecord {
+  id: number;
+  keyHash: string;
+  keyText: string;
+  prefix: string;
+  present: boolean;
+  createRevision: number;
+  modRevision: number;
+  version: number;
+  leaseId: number;
+  currentKeyBytes: number;
+  currentValueBytes: number;
+  currentStoredBytes: number;
+  historicalVersions: number;
+  historicalBytes: number;
+  tombstoneCount: number;
+  tombstoneBytes: number;
+  revisionCount: number;
+  historicalAmplification: number;
+}
+
+export interface PrefixStat {
+  prefix: string;
+  depth: number;
+  currentKeyCount: number;
+  currentValueBytes: number;
+  historicalVersions: number;
+  historicalBytes: number;
+  tombstoneCount: number;
+  tombstoneBytes: number;
+  maxValueBytes: number;
+}
+
+export interface RevisionRecord {
+  keyHash: string;
+  keyText: string;
+  mainRevision: number;
+  subRevision: number;
+  createRevision: number;
+  modRevision: number;
+  version: number;
+  leaseId: number;
+  valueBytes: number;
+  storedBytes: number;
+  tombstone: boolean;
+  valueHash: string;
+}
+
+export interface KeyResult {
+  items: KeyRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface KeyFilters {
+  prefix: string;
+  minSize: string;
+  minRevisions: string;
+  tombstone: boolean;
+  sort: 'key' | 'current_bytes' | 'historical_bytes' | 'revision_count' | 'tombstone_count';
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -113,5 +188,28 @@ export function listPages(id: string, page: number, pageType: string): Promise<P
 
 export async function listBuckets(id: string): Promise<BucketStat[]> {
   const response = await request<{ items: BucketStat[] }>(`/api/v1/tasks/${encodeURIComponent(id)}/buckets?limit=20`);
+  return response.items;
+}
+
+export function getMVCCSummary(id: string): Promise<MVCCSummary> {
+  return request(`/api/v1/tasks/${encodeURIComponent(id)}/mvcc-summary`);
+}
+
+export async function listPrefixes(id: string): Promise<PrefixStat[]> {
+  const response = await request<{ items: PrefixStat[] }>(`/api/v1/tasks/${encodeURIComponent(id)}/prefixes?limit=20`);
+  return response.items;
+}
+
+export function listKeys(id: string, page: number, filters: KeyFilters): Promise<KeyResult> {
+  const query = new URLSearchParams({ page: String(page), pageSize: '50', sort: filters.sort, order: filters.sort === 'key' ? 'asc' : 'desc' });
+  if (filters.prefix) query.set('prefix', filters.prefix);
+  if (filters.minSize) query.set('minSize', filters.minSize);
+  if (filters.minRevisions) query.set('minRevisions', filters.minRevisions);
+  if (filters.tombstone) query.set('tombstone', 'true');
+  return request(`/api/v1/tasks/${encodeURIComponent(id)}/keys?${query}`);
+}
+
+export async function listKeyRevisions(id: string, keyId: number): Promise<RevisionRecord[]> {
+  const response = await request<{ items: RevisionRecord[] }>(`/api/v1/tasks/${encodeURIComponent(id)}/keys/${keyId}/revisions?pageSize=100`);
   return response.items;
 }
