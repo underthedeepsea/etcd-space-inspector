@@ -105,7 +105,7 @@ func PhysicalStage(manifests *task.Service, batchSize int) task.Stage {
 	}}
 }
 
-// MVCCStage creates the M3 bounded etcd 3.4 semantic analysis stage.
+// MVCCStage creates the bounded etcd 3.4 MVCC and Kubernetes semantic stage.
 func MVCCStage(manifests *task.Service, workers, channelSize, batchSize int) task.Stage {
 	return task.Stage{Name: "mvcc-semantic", Run: func(ctx context.Context, taskContext *task.Context) error {
 		taskDir := manifests.TaskDir(taskContext.Task.ID)
@@ -126,12 +126,18 @@ func MVCCStage(manifests *task.Service, workers, channelSize, batchSize int) tas
 			if resetErr := repository.ResetMVCC(ctx); resetErr != nil {
 				return resetErr
 			}
-			return repository.SaveUnavailable(ctx)
+			if err := repository.SaveUnavailable(ctx); err != nil {
+				return err
+			}
+			return storage.NewKubeRepository(db, taskContext.Task.ID).SaveUnavailable(ctx)
 		}
 		if err != nil {
 			return apperr.E("MVCC_DECODE_FAILED", "MVCC analysis failed", err)
 		}
 		if err := analyzer.Materialize(ctx, db, taskContext.Task.ID, batchSize); err != nil {
+			return err
+		}
+		if err := analyzer.MaterializeKubernetes(ctx, db, taskContext.Task.ID, batchSize); err != nil {
 			return err
 		}
 		return repository.SaveScanStats(ctx, stats)

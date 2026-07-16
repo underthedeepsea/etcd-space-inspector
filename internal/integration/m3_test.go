@@ -69,7 +69,8 @@ func TestM3EndToEndNoPlaintext(t *testing.T) {
 func TestM3FallsBackWithoutConfirmedVersion(t *testing.T) {
 	root := t.TempDir()
 	source := createEtcd34Fixture(t, root)
-	application := app.NewM3(filepath.Join(root, "data"), 2, 1, 1)
+	dataDir := filepath.Join(root, "data")
+	application := app.NewM3(dataDir, 2, 1, 1)
 	created, err := application.Create(context.Background(), task.CreateRequest{
 		Name: "generic", SourcePath: source, InputType: "snapshot", MaxInputBytes: 1 << 20,
 	})
@@ -86,6 +87,18 @@ func TestM3FallsBackWithoutConfirmedVersion(t *testing.T) {
 	}
 	if summary.SemanticAvailable {
 		t.Fatalf("summary=%+v", summary)
+	}
+	db, err := storage.OpenReadOnly(filepath.Join(dataDir, "tasks", created.ID, "task.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var kubernetesAvailable bool
+	if err := db.QueryRow(`SELECT semantic_available FROM kube_summaries WHERE task_id = ?`, created.ID).Scan(&kubernetesAvailable); err != nil {
+		t.Fatal(err)
+	}
+	if kubernetesAvailable {
+		t.Fatal("Kubernetes semantics should be unavailable without a confirmed etcd version")
 	}
 }
 

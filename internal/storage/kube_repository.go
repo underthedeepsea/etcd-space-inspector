@@ -19,6 +19,22 @@ func NewKubeRepository(db *sql.DB, taskID string) *KubeRepository {
 	return &KubeRepository{db: db, taskID: taskID}
 }
 
+// SaveUnavailable records that Kubernetes semantics could not run for this task.
+func (r *KubeRepository) SaveUnavailable(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `
+INSERT INTO kube_summaries (
+  task_id, semantic_available, current_objects, current_bytes, historical_bytes,
+  decoded_json, decoded_protobuf, encrypted, decode_failures
+) VALUES (?, 0, 0, 0, 0, 0, 0, 0, 0)
+ON CONFLICT(task_id) DO UPDATE SET
+  semantic_available=0, current_objects=0, current_bytes=0, historical_bytes=0,
+  decoded_json=0, decoded_protobuf=0, encrypted=0, decode_failures=0`, r.taskID)
+	if err != nil {
+		return fmt.Errorf("save unavailable Kubernetes summary: %w", err)
+	}
+	return nil
+}
+
 func insertKubeRecord(ctx context.Context, tx *sql.Tx, taskID string, record *kube.ObjectRevision) error {
 	if record == nil {
 		return nil
