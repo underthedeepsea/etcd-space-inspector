@@ -1,6 +1,6 @@
 # ETCD DBSize Analyzer
 
-ETCD DBSize Analyzer 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前分支为 M2 `0.2.0`：除安全导入和任务管理外，还能只读分析 bbolt 文件/Page/空闲空间与 Bucket 占用，并通过本地 Web UI 下钻。
+ETCD DBSize Analyzer 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前版本为 M3 `0.3.0`：支持安全导入与任务管理、Generic bbolt 物理空间分析，以及经过版本门控的 etcd 3.4 MVCC revision、历史版本、tombstone、Prefix 和 Top Key 分析。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
 
 ## 构建
 
@@ -39,6 +39,12 @@ bin/etcd-analyzer analyze \
 bin/etcd-analyzer server \
   --data-dir ./analysis-data \
   --listen 127.0.0.1:8080
+
+# 为已完成任务另存一份独立 HTML 报告
+bin/etcd-analyzer report \
+  --task <task-id> \
+  --data-dir ./analysis-data \
+  --output ./report.html
 ```
 
 默认只监听 `127.0.0.1`。监听非本地地址会输出安全警告。
@@ -52,7 +58,7 @@ analysis-data/
         ├── manifest.json
         ├── task.db
         ├── source/input.db
-        ├── exports/
+        ├── exports/report.html
         └── logs/
 ```
 
@@ -72,13 +78,33 @@ analysis-data/
 - `GET /api/v1/tasks/{id}/space-composition`
 - `GET /api/v1/tasks/{id}/pages`
 - `GET /api/v1/tasks/{id}/buckets`
+- `GET /api/v1/tasks/{id}/mvcc-summary`
+- `GET /api/v1/tasks/{id}/prefixes`
+- `GET /api/v1/tasks/{id}/keys`
+- `GET /api/v1/tasks/{id}/keys/{key-id}`
+- `GET /api/v1/tasks/{id}/keys/{key-id}/revisions`
 
 任务 JSON 请求采用严格字段校验。进程重启时，遗留的 `running` 任务会被标为 `TASK_INTERRUPTED`，不会伪装成仍在运行。
 
-## 当前边界
+Key 列表支持 `prefix`、`minSize`、`minRevisions`、`tombstone`、`sort`、`order`、`page` 和 `pageSize` 查询。排序字段采用固定白名单，单页最多 500 条。
 
-`0.2.0` 已完成 M1 工程骨架以及 M2 Generic bbolt 分析。页面类型来自 bbolt 公开的只读 Page API；Bucket 分配/使用量来自 `Bucket.Stats`，因此属于离线估算值。损坏或无法打开的文件分别保留稳定的任务错误证据，源文件不会被修改。
+## 语义门控与安全边界
 
-etcd 3.4 MVCC revision、tombstone、Prefix 与 Top Key 在 `0.3.0`（M3）交付。未确认 etcd 版本时，系统只输出 Generic bbolt 结论，不猜测 MVCC 语义。
+物理分析适用于可被 bbolt 只读打开的输入。页面类型来自 bbolt 公开 Page API；Bucket 分配/使用量来自 `Bucket.Stats`，因此属于离线估算值。损坏或无法打开的文件会留下稳定错误码，源文件不会被修改。
 
-本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，也不会持久化原始 Value。
+MVCC 解码仅在任务明确声明精确的 `3.4.x` 版本时启用。版本缺失、不是 3.4，或结构不匹配时，任务仍正常完成并记录 `semantic_decode_unavailable`，只保留 Generic bbolt 结论，不猜测语义。
+
+原始 Value 仅在有界内存流水线中参与长度与 SHA-256 计算，不写入 SQLite、日志、API 或 HTML。持久化的 revision 仅包含 key、版本、大小、tombstone 与哈希元数据。
+
+本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，不解析 Kubernetes 资源语义，不采集日志、审计或 Prometheus 数据，也不进行 snapshot diff。
+
+## 验证
+
+```bash
+make check
+make build
+bin/etcd-analyzer version   # 0.3.0
+
+# 可选的百万 revision 长测，不在默认测试门禁中运行
+ETCD_ANALYZER_LONG_TESTS=1 go test ./internal/integration -run TestMillionRevisions -v
+```
