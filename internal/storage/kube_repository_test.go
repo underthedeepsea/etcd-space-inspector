@@ -42,3 +42,56 @@ func TestKubeRepositoryStoresSafeRecordAndFields(t *testing.T) {
 		t.Fatalf("revisions=%d fields=%d", revisions, fields)
 	}
 }
+
+func TestKubeRepositoryQueriesValueFreeObjects(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "task.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	statements := []string{
+		`INSERT INTO kube_summaries VALUES ('t1', 1, 1, 100, 50, 0, 1, 0, 0)`,
+		`INSERT INTO kube_resource_stats VALUES ('t1', 'apps', 'deployments', 1, 100, 50)`,
+		`INSERT INTO kube_namespace_stats VALUES ('t1', 'prod', 1, 100, 50)`,
+		`INSERT INTO kube_object_records VALUES (7, 't1', 'hash', '/registry/deployments', 'apps', 'deployments', 'prod', 'demo', 'demo', 0, 0, 0, 'decoded_protobuf', 1, 100, 50, 3, 'status', 80)`,
+		`INSERT INTO kube_revision_records VALUES (10, 't1', 'hash', 3, 0, '/registry/deployments', 'apps', 'deployments', 'prod', 'demo', 'demo', 0, 0, 0, 'protobuf', 'decoded_protobuf', 100)`,
+		`INSERT INTO kube_field_records VALUES (11, 't1', 10, 'hash', 3, 'status', 80, 'object', 'safe-hash')`,
+		`INSERT INTO kube_diff_records VALUES (12, 't1', 'hash', 2, 3, '[]', '[]', '["status"]', 10, 0, 1, 0)`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repository := NewKubeRepository(db, "t1")
+	ctx := context.Background()
+	summary, err := repository.Summary(ctx)
+	if err != nil || !summary.SemanticAvailable || summary.CurrentObjects != 1 {
+		t.Fatalf("summary=%+v err=%v", summary, err)
+	}
+	resources, err := repository.TopResources(ctx, 10)
+	if err != nil || len(resources) != 1 || resources[0].Resource != "deployments" {
+		t.Fatalf("resources=%+v err=%v", resources, err)
+	}
+	namespaces, err := repository.TopNamespaces(ctx, 10)
+	if err != nil || len(namespaces) != 1 || namespaces[0].Namespace != "prod" {
+		t.Fatalf("namespaces=%+v err=%v", namespaces, err)
+	}
+	objects, err := repository.Objects(ctx, ObjectQuery{
+		APIGroup: "apps", Resource: "deployments", Namespace: "prod", MinSize: 100,
+		MinRevisions: 3, DecodeStatus: kube.StatusDecodedProtobuf, Field: "status",
+		Sort: "historical_bytes", Desc: true, Limit: 10,
+	})
+	if err != nil || objects.Total != 1 || len(objects.Items) != 1 || objects.Items[0].Identity.DisplayName != "demo" {
+		t.Fatalf("objects=%+v err=%v", objects, err)
+	}
+	object, err := repository.ObjectByID(ctx, 7)
+	if err != nil || object.KeyHash != "hash" {
+		t.Fatalf("object=%+v err=%v", object, err)
+	}
+	revisions, err := repository.ObjectRevisions(ctx, 7, 10, 0)
+	if err != nil || revisions.Total != 1 || len(revisions.Items) != 1 || len(revisions.Items[0].Fields) != 1 ||
+		len(revisions.Diffs) != 1 || !revisions.Diffs[0].StatusOnly {
+		t.Fatalf("revisions=%+v err=%v", revisions, err)
+	}
+}

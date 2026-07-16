@@ -84,7 +84,7 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return 1
 	}
 	handler := api.New(api.Dependencies{
-		Version: version.Value, Tasks: application, Analysis: application, MVCC: application,
+		Version: version.Value, Tasks: application, Analysis: application, MVCC: application, Kubernetes: application,
 		MaxInputBytes: settings.Security.MaxInputBytes, UI: web.Handler(),
 	})
 	listener, err := net.Listen("tcp", settings.Server.Listen)
