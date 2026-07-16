@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	backend "etcd-analyzer/internal/backend/bbolt"
+	"etcd-analyzer/internal/kube"
 	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/task"
 )
@@ -22,6 +23,10 @@ type Summary struct {
 	TopCurrentKeys    []mvcc.KeyRecord
 	TopHistoricalKeys []mvcc.KeyRecord
 	TopPrefixes       []mvcc.PrefixStat
+	Kubernetes        kube.Summary
+	TopResources      []kube.ResourceStat
+	TopNamespaces     []kube.NamespaceStat
+	TopObjects        []kube.ObjectRecord
 }
 
 // WriteFile atomically replaces a private report file.
@@ -92,4 +97,16 @@ var summaryTemplate = template.Must(template.New("summary").Parse(`<!doctype htm
 {{if .TopPrefixes}}<section><h2>Top prefixes</h2><table><thead><tr><th>Prefix</th><th>Current keys</th><th>Historical bytes</th><th>Tombstones</th></tr></thead><tbody>{{range .TopPrefixes}}<tr><td>{{.Prefix}}</td><td>{{.CurrentKeyCount}}</td><td>{{.HistoricalBytes}}</td><td>{{.TombstoneCount}}</td></tr>{{end}}</tbody></table></section>{{end}}
 {{if .TopCurrentKeys}}<section><h2>Top current-size keys</h2><table><thead><tr><th>Key</th><th>Current bytes</th><th>Revisions</th></tr></thead><tbody>{{range .TopCurrentKeys}}<tr><td>{{.KeyText}}</td><td>{{.CurrentStoredBytes}}</td><td>{{.RevisionCount}}</td></tr>{{end}}</tbody></table></section>{{end}}
 {{if .TopHistoricalKeys}}<section><h2>Top historical-size keys</h2><table><thead><tr><th>Key</th><th>Historical bytes</th><th>Revisions</th><th>Tombstones</th></tr></thead><tbody>{{range .TopHistoricalKeys}}<tr><td>{{.KeyText}}</td><td>{{.HistoricalBytes}}</td><td>{{.RevisionCount}}</td><td>{{.TombstoneCount}}</td></tr>{{end}}</tbody></table></section>{{end}}
+<section><h2>Kubernetes semantics</h2>{{if .Kubernetes.SemanticAvailable}}<div class="metrics">
+<div class="metric"><span>Current objects</span><strong>{{.Kubernetes.CurrentObjects}}</strong></div>
+<div class="metric"><span>Current bytes</span><strong>{{.Kubernetes.CurrentBytes}}</strong></div>
+<div class="metric"><span>Historical bytes</span><strong>{{.Kubernetes.HistoricalBytes}}</strong></div>
+<div class="metric"><span>Decoded JSON</span><strong>{{.Kubernetes.DecodedJSON}}</strong></div>
+<div class="metric"><span>Decoded Protobuf</span><strong>{{.Kubernetes.DecodedProtobuf}}</strong></div>
+<div class="metric"><span>Encrypted</span><strong>{{.Kubernetes.Encrypted}}</strong></div></div>
+{{if .Kubernetes.DecodeFailures}}<p class="warning">Opaque or failed Kubernetes revisions: {{.Kubernetes.DecodeFailures}}</p>{{end}}
+{{else}}<p class="warning">Kubernetes semantic analysis was skipped because MVCC decoding was unavailable.</p>{{end}}</section>
+{{if .TopResources}}<section><h2>Kubernetes resources</h2><table><thead><tr><th>API group</th><th>Resource</th><th>Objects</th><th>Current bytes</th><th>Historical bytes</th></tr></thead><tbody>{{range .TopResources}}<tr><td>{{.APIGroup}}</td><td>{{.Resource}}</td><td>{{.CurrentObjects}}</td><td>{{.CurrentBytes}}</td><td>{{.HistoricalBytes}}</td></tr>{{end}}</tbody></table></section>{{end}}
+{{if .TopNamespaces}}<section><h2>Kubernetes namespaces</h2><table><thead><tr><th>Namespace</th><th>Objects</th><th>Current bytes</th><th>Historical bytes</th></tr></thead><tbody>{{range .TopNamespaces}}<tr><td>{{if .Namespace}}{{.Namespace}}{{else}}(cluster-scoped){{end}}</td><td>{{.CurrentObjects}}</td><td>{{.CurrentBytes}}</td><td>{{.HistoricalBytes}}</td></tr>{{end}}</tbody></table></section>{{end}}
+{{if .TopObjects}}<section><h2>Kubernetes objects</h2><table><thead><tr><th>Group/resource</th><th>Namespace</th><th>Name</th><th>Current bytes</th><th>Historical bytes</th><th>Largest field</th></tr></thead><tbody>{{range .TopObjects}}<tr><td>{{.Identity.APIGroup}}/{{.Identity.Resource}}</td><td>{{if .Identity.Namespace}}{{.Identity.Namespace}}{{else}}(cluster-scoped){{end}}</td><td>{{.Identity.DisplayName}}</td><td>{{.CurrentBytes}}</td><td>{{.HistoricalBytes}}</td><td>{{.LargestFieldPath}} ({{.LargestFieldBytes}})</td></tr>{{end}}</tbody></table></section>{{end}}
 </body></html>`))

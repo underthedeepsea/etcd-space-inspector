@@ -16,10 +16,10 @@ func TestKubeRepositoryStoresSafeRecordAndFields(t *testing.T) {
 	}
 	defer db.Close()
 	record := mvcc.Record{
-		Revision: mvcc.Revision{KeyHash: "hash", KeyText: "/registry/pods/default/p", MainRevision: 1, ModRevision: 1, ValueBytes: 20, StoredBytes: 40},
+		Revision: mvcc.Revision{KeyHash: "hash", KeyText: "/registry/secrets/default/db-password", MainRevision: 1, ModRevision: 1, ValueBytes: 20, StoredBytes: 40},
 		Kubernetes: &kube.ObjectRevision{
 			KeyHash: "hash", MainRevision: 1,
-			Identity:    kube.Identity{StoragePrefix: "/registry/pods", Resource: "pods", Namespace: "default", Name: "p", DisplayName: "p"},
+			Identity:    kube.Identity{StoragePrefix: "/registry/secrets", Resource: "secrets", Namespace: "default", Name: "db-password", DisplayName: "redacted:hash", Sensitive: true},
 			ContentType: "json", DecodeStatus: kube.StatusDecodedJSON, ValueBytes: 20,
 			Fields: []kube.FieldStat{{Path: "spec", ByteSize: 10, TypeClass: "object", Hash: "field-hash"}},
 		},
@@ -40,6 +40,13 @@ func TestKubeRepositoryStoresSafeRecordAndFields(t *testing.T) {
 	}
 	if revisions != 1 || fields != 1 {
 		t.Fatalf("revisions=%d fields=%d", revisions, fields)
+	}
+	var storedName string
+	if err := db.QueryRow(`SELECT object_name FROM kube_revision_records WHERE task_id = 't1'`).Scan(&storedName); err != nil {
+		t.Fatal(err)
+	}
+	if storedName != "redacted:hash" {
+		t.Fatalf("sensitive name persisted as %q", storedName)
 	}
 }
 

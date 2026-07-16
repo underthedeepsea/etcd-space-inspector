@@ -354,6 +354,10 @@ func insertKubeRecord(ctx context.Context, tx *sql.Tx, taskID string, record *ku
 	if record == nil {
 		return nil
 	}
+	objectName := record.Identity.Name
+	if record.Identity.Sensitive {
+		objectName = record.Identity.DisplayName
+	}
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO kube_revision_records (
   task_id, key_hash, main_revision, sub_revision, storage_prefix, api_group, resource,
@@ -362,7 +366,7 @@ INSERT INTO kube_revision_records (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		taskID, record.KeyHash, record.MainRevision, record.SubRevision,
 		record.Identity.StoragePrefix, record.Identity.APIGroup, record.Identity.Resource,
-		record.Identity.Namespace, record.Identity.Name, record.Identity.DisplayName,
+		record.Identity.Namespace, objectName, record.Identity.DisplayName,
 		record.Identity.CRD, record.Identity.ClusterScoped, record.Identity.Sensitive,
 		record.ContentType, record.DecodeStatus, record.ValueBytes)
 	if err != nil {

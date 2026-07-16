@@ -395,9 +395,27 @@ func buildReportSummary(ctx context.Context, db *sql.DB, item task.Task) (report
 	if err != nil {
 		return report.Summary{}, err
 	}
+	kubernetesRepository := storage.NewKubeRepository(db, item.ID)
+	kubernetesSummary, err := kubernetesRepository.Summary(ctx)
+	if err != nil {
+		return report.Summary{}, err
+	}
+	resources, err := kubernetesRepository.TopResources(ctx, 20)
+	if err != nil {
+		return report.Summary{}, err
+	}
+	namespaces, err := kubernetesRepository.TopNamespaces(ctx, 20)
+	if err != nil {
+		return report.Summary{}, err
+	}
+	objects, err := kubernetesRepository.Objects(ctx, storage.ObjectQuery{Sort: "current_bytes", Desc: true, Limit: 20})
+	if err != nil {
+		return report.Summary{}, err
+	}
 	return report.Summary{
 		Task: item, Physical: physical, MVCC: semantic,
 		TopCurrentKeys: current.Items, TopHistoricalKeys: historical.Items, TopPrefixes: prefixes,
+		Kubernetes: kubernetesSummary, TopResources: resources, TopNamespaces: namespaces, TopObjects: objects.Items,
 	}, nil
 }
 

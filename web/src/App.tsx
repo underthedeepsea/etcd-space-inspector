@@ -4,6 +4,8 @@ import {
   cancelTask,
   createTask,
   deleteTask,
+  getKubernetesObject,
+  getKubernetesSummary,
   getMVCCSummary,
   getOverview,
   KeyFilters,
@@ -12,16 +14,27 @@ import {
   listBuckets,
   listKeyRevisions,
   listKeys,
+  listNamespaces,
+  listObjectRevisions,
+  listObjects,
   listPages,
   listPrefixes,
+  listResources,
   listTasks,
+  NamespaceStat,
   MVCCSummary,
+  ObjectFilters,
+  ObjectResult,
+  ObjectRevisionResult,
   PageResult,
   PrefixStat,
   RevisionRecord,
+  ResourceStat,
   SpaceSummary,
   startTask,
   Task,
+  KubernetesObject,
+  KubernetesSummary,
 } from './api';
 
 function formatBytes(value: number): string {
@@ -268,6 +281,106 @@ function SemanticAnalysis({ taskId }: { taskId: string }) {
         <div className="table-wrap"><table><thead><tr><th>Main</th><th>Sub</th><th>Version</th><th>Stored bytes</th><th>Tombstone</th><th>Value hash</th></tr></thead>
           <tbody>{revisions.map((revision) => <tr key={`${revision.mainRevision}-${revision.subRevision}`}><td>{revision.mainRevision}</td><td>{revision.subRevision}</td><td>{revision.version}</td><td>{formatBytes(revision.storedBytes)}</td><td>{revision.tombstone ? 'yes' : 'no'}</td><td><code>{revision.valueHash.slice(0, 16)}</code></td></tr>)}</tbody>
         </table></div>
+      </div>}
+    </>}
+    <KubernetesAnalysis taskId={taskId} />
+  </div>;
+}
+
+const initialObjectFilters: ObjectFilters = {
+  group: '', resource: '', namespace: '', minSize: '', minRevisions: '',
+  decodeStatus: '', field: '', sort: 'historical_bytes',
+};
+
+function KubernetesAnalysis({ taskId }: { taskId: string }) {
+  const [summary, setSummary] = useState<KubernetesSummary | null>(null);
+  const [resources, setResources] = useState<ResourceStat[]>([]);
+  const [namespaces, setNamespaces] = useState<NamespaceStat[]>([]);
+  const [objects, setObjects] = useState<ObjectResult | null>(null);
+  const [filters, setFilters] = useState<ObjectFilters>(initialObjectFilters);
+  const [page, setPage] = useState(1);
+  const [selectedObject, setSelectedObject] = useState<KubernetesObject | null>(null);
+  const [revisions, setRevisions] = useState<ObjectRevisionResult | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      getKubernetesSummary(taskId), listResources(taskId), listNamespaces(taskId),
+      listObjects(taskId, page, filters),
+    ]).then(([nextSummary, nextResources, nextNamespaces, nextObjects]) => {
+      if (!active) return;
+      setSummary(nextSummary); setResources(nextResources); setNamespaces(nextNamespaces);
+      setObjects(nextObjects); setError('');
+    }).catch((reason: unknown) => {
+      if (active) setError(reason instanceof Error ? reason.message : 'Unable to load Kubernetes analysis');
+    });
+    return () => { active = false; };
+  }, [taskId, page, filters]);
+
+  async function inspect(item: KubernetesObject) {
+    try {
+      const [nextObject, nextRevisions] = await Promise.all([
+        getKubernetesObject(taskId, item.id), listObjectRevisions(taskId, item.id),
+      ]);
+      setSelectedObject(nextObject); setRevisions(nextRevisions); setError('');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to load object revisions');
+    }
+  }
+
+  return <div className="kubernetes">
+    <h3>Kubernetes storage</h3>
+    {error && <p role="alert">{error}</p>}
+    {!summary && !error && <p>Loading Kubernetes analysis…</p>}
+    {summary && !summary.semanticAvailable && <p className="notice">Kubernetes semantics were skipped because MVCC decoding was unavailable.</p>}
+    {summary?.semanticAvailable && <>
+      <div className="metrics">
+        <Metric label="Current objects" value={String(summary.currentObjects)} />
+        <Metric label="Current bytes" value={formatBytes(summary.currentBytes)} />
+        <Metric label="Historical bytes" value={formatBytes(summary.historicalBytes)} />
+        <Metric label="JSON revisions" value={String(summary.decodedJson)} />
+        <Metric label="Protobuf revisions" value={String(summary.decodedProtobuf)} />
+        <Metric label="Encrypted" value={String(summary.encrypted)} />
+      </div>
+
+      <div className="ranking-grid">
+        <div><h4>Top resources</h4><div className="table-wrap"><table><thead><tr><th>Group/resource</th><th>Objects</th><th>Current</th><th>History</th></tr></thead>
+          <tbody>{resources.map((item) => <tr key={`${item.apiGroup}/${item.resource}`}><td>{item.apiGroup || 'core'}/{item.resource}</td><td>{item.currentObjects}</td><td>{formatBytes(item.currentBytes)}</td><td>{formatBytes(item.historicalBytes)}</td></tr>)}</tbody>
+        </table></div></div>
+        <div><h4>Top namespaces</h4><div className="table-wrap"><table><thead><tr><th>Namespace</th><th>Objects</th><th>Current</th><th>History</th></tr></thead>
+          <tbody>{namespaces.map((item) => <tr key={item.namespace || 'cluster-scoped'}><td>{item.namespace || '(cluster-scoped)'}</td><td>{item.currentObjects}</td><td>{formatBytes(item.currentBytes)}</td><td>{formatBytes(item.historicalBytes)}</td></tr>)}</tbody>
+        </table></div></div>
+      </div>
+
+      <div className="section-title"><h4>Objects</h4><button type="button" onClick={() => { setFilters(initialObjectFilters); setPage(1); }}>Reset filters</button></div>
+      <div className="filters object-filters">
+        <label>API group<input value={filters.group} onChange={(event) => { setFilters({ ...filters, group: event.target.value }); setPage(1); }} placeholder="apps" /></label>
+        <label>Resource<input value={filters.resource} onChange={(event) => { setFilters({ ...filters, resource: event.target.value }); setPage(1); }} placeholder="deployments" /></label>
+        <label>Namespace<input value={filters.namespace} onChange={(event) => { setFilters({ ...filters, namespace: event.target.value }); setPage(1); }} /></label>
+        <label>Minimum bytes<input type="number" min="0" value={filters.minSize} onChange={(event) => { setFilters({ ...filters, minSize: event.target.value }); setPage(1); }} /></label>
+        <label>Minimum revisions<input type="number" min="0" value={filters.minRevisions} onChange={(event) => { setFilters({ ...filters, minRevisions: event.target.value }); setPage(1); }} /></label>
+        <label>Decode status<select value={filters.decodeStatus} onChange={(event) => { setFilters({ ...filters, decodeStatus: event.target.value }); setPage(1); }}><option value="">All</option><option value="decoded_json">JSON</option><option value="decoded_protobuf">Protobuf</option><option value="encrypted">Encrypted</option><option value="protobuf_unsupported">Unsupported Protobuf</option><option value="decode_failed">Decode failed</option><option value="format_unknown">Unknown format</option></select></label>
+        <label>Field<select value={filters.field} onChange={(event) => { setFilters({ ...filters, field: event.target.value }); setPage(1); }}><option value="">All</option><option value="spec">spec</option><option value="status">status</option><option value="managedFields">managedFields</option><option value="annotations">annotations</option><option value="labels">labels</option><option value="data">data</option><option value="binaryData">binaryData</option></select></label>
+        <label>Sort<select value={filters.sort} onChange={(event) => { setFilters({ ...filters, sort: event.target.value as ObjectFilters['sort'] }); setPage(1); }}><option value="historical_bytes">Historical bytes</option><option value="current_bytes">Current bytes</option><option value="revision_count">Revisions</option><option value="largest_field">Largest field</option><option value="name">Name</option></select></label>
+      </div>
+      <div className="table-wrap"><table><thead><tr><th>Group/resource</th><th>Namespace</th><th>Name</th><th>Status</th><th>Current</th><th>History</th><th>Revisions</th><th>Largest field</th><th></th></tr></thead>
+        <tbody>{objects?.items.map((item) => <tr key={item.id}><td>{item.identity.apiGroup || 'core'}/{item.identity.resource}</td><td>{item.identity.namespace || '(cluster-scoped)'}</td><td>{item.identity.displayName}</td><td>{item.decodeStatus}</td><td>{formatBytes(item.currentBytes)}</td><td>{formatBytes(item.historicalBytes)}</td><td>{item.revisionCount}</td><td>{item.largestFieldPath || '—'} {item.largestFieldBytes ? `(${formatBytes(item.largestFieldBytes)})` : ''}</td><td><button type="button" onClick={() => void inspect(item)}>Inspect</button></td></tr>)}</tbody>
+      </table></div>
+      <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button><span>Page {page} · {objects?.total ?? 0} objects</span><button disabled={!objects || page * objects.pageSize >= objects.total} onClick={() => setPage((value) => value + 1)}>Next</button></div>
+
+      {selectedObject && <div className="drawer" role="region" aria-label="Kubernetes object details">
+        <div className="section-title"><h4>{selectedObject.identity.displayName}</h4><button type="button" onClick={() => { setSelectedObject(null); setRevisions(null); }}>Close</button></div>
+        <p>{selectedObject.identity.apiGroup || 'core'}/{selectedObject.identity.resource} · {selectedObject.identity.namespace || '(cluster-scoped)'} · {selectedObject.decodeStatus}</p>
+        <p className="hash">Key hash: {selectedObject.keyHash}</p>
+        <h4>Selected field sizes</h4>
+        <div className="table-wrap"><table><thead><tr><th>Revision</th><th>Path</th><th>Bytes</th><th>Type</th><th>Hash</th></tr></thead><tbody>
+          {revisions?.items.flatMap((revision) => revision.fields.map((field) => <tr key={`${revision.mainRevision}-${revision.subRevision}-${field.path}`}><td>{revision.mainRevision}.{revision.subRevision}</td><td>{field.path}</td><td>{formatBytes(field.byteSize)}</td><td>{field.typeClass}</td><td><code>{field.hash.slice(0, 16)}</code></td></tr>))}
+        </tbody></table></div>
+        <h4>Adjacent revision changes</h4>
+        <div className="table-wrap"><table><thead><tr><th>Revisions</th><th>Changed paths</th><th>Byte delta</th><th>Classification</th></tr></thead><tbody>
+          {revisions?.diffs.map((diff) => <tr key={`${diff.previousMainRevision}-${diff.currentMainRevision}`}><td>{diff.previousMainRevision} → {diff.currentMainRevision}</td><td>{[...diff.addedPaths, ...diff.removedPaths, ...diff.modifiedPaths].join(', ') || 'none'}</td><td>{diff.byteDelta}</td><td>{diff.statusOnly ? 'status only' : diff.timestampOnly ? 'timestamps only' : diff.managedFieldsOnly ? 'managed fields only' : 'structural'}</td></tr>)}
+        </tbody></table></div>
       </div>}
     </>}
   </div>;

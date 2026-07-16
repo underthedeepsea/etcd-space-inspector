@@ -142,6 +142,113 @@ export interface KeyFilters {
   sort: 'key' | 'current_bytes' | 'historical_bytes' | 'revision_count' | 'tombstone_count';
 }
 
+export interface KubernetesIdentity {
+  storagePrefix: string;
+  apiGroup: string;
+  resource: string;
+  namespace: string;
+  name: string;
+  displayName: string;
+  crd: boolean;
+  clusterScoped: boolean;
+  sensitive: boolean;
+}
+
+export interface KubernetesSummary {
+  semanticAvailable: boolean;
+  currentObjects: number;
+  currentBytes: number;
+  historicalBytes: number;
+  decodedJson: number;
+  decodedProtobuf: number;
+  encrypted: number;
+  decodeFailures: number;
+}
+
+export interface ResourceStat {
+  apiGroup: string;
+  resource: string;
+  currentObjects: number;
+  currentBytes: number;
+  historicalBytes: number;
+}
+
+export interface NamespaceStat {
+  namespace: string;
+  currentObjects: number;
+  currentBytes: number;
+  historicalBytes: number;
+}
+
+export interface KubernetesObject {
+  id: number;
+  keyHash: string;
+  identity: KubernetesIdentity;
+  decodeStatus: string;
+  present: boolean;
+  currentBytes: number;
+  historicalBytes: number;
+  revisionCount: number;
+  largestFieldPath: string;
+  largestFieldBytes: number;
+}
+
+export interface KubernetesField {
+  path: string;
+  byteSize: number;
+  typeClass: string;
+  hash: string;
+}
+
+export interface KubernetesRevision {
+  keyHash: string;
+  mainRevision: number;
+  subRevision: number;
+  identity: KubernetesIdentity;
+  contentType: string;
+  decodeStatus: string;
+  valueBytes: number;
+  fields: KubernetesField[];
+}
+
+export interface KubernetesDiff {
+  previousMainRevision: number;
+  currentMainRevision: number;
+  addedPaths: string[];
+  removedPaths: string[];
+  modifiedPaths: string[];
+  byteDelta: number;
+  timestampOnly: boolean;
+  statusOnly: boolean;
+  managedFieldsOnly: boolean;
+}
+
+export interface ObjectResult {
+  items: KubernetesObject[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface ObjectRevisionResult {
+  items: KubernetesRevision[];
+  diffs: KubernetesDiff[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface ObjectFilters {
+  group: string;
+  resource: string;
+  namespace: string;
+  minSize: string;
+  minRevisions: string;
+  decodeStatus: string;
+  field: string;
+  sort: 'name' | 'current_bytes' | 'historical_bytes' | 'revision_count' | 'largest_field';
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -212,4 +319,41 @@ export function listKeys(id: string, page: number, filters: KeyFilters): Promise
 export async function listKeyRevisions(id: string, keyId: number): Promise<RevisionRecord[]> {
   const response = await request<{ items: RevisionRecord[] }>(`/api/v1/tasks/${encodeURIComponent(id)}/keys/${keyId}/revisions?pageSize=100`);
   return response.items;
+}
+
+export function getKubernetesSummary(id: string): Promise<KubernetesSummary> {
+  return request(`/api/v1/tasks/${encodeURIComponent(id)}/kubernetes-summary`);
+}
+
+export async function listResources(id: string): Promise<ResourceStat[]> {
+  const response = await request<{ items: ResourceStat[] }>(`/api/v1/tasks/${encodeURIComponent(id)}/resources?limit=20`);
+  return response.items;
+}
+
+export async function listNamespaces(id: string): Promise<NamespaceStat[]> {
+  const response = await request<{ items: NamespaceStat[] }>(`/api/v1/tasks/${encodeURIComponent(id)}/namespaces?limit=20`);
+  return response.items;
+}
+
+export function listObjects(id: string, page: number, filters: ObjectFilters): Promise<ObjectResult> {
+  const query = new URLSearchParams({
+    page: String(page), pageSize: '50', sort: filters.sort,
+    order: filters.sort === 'name' ? 'asc' : 'desc',
+  });
+  if (filters.group) query.set('group', filters.group);
+  if (filters.resource) query.set('resource', filters.resource);
+  if (filters.namespace) query.set('namespace', filters.namespace);
+  if (filters.minSize) query.set('minSize', filters.minSize);
+  if (filters.minRevisions) query.set('minRevisions', filters.minRevisions);
+  if (filters.decodeStatus) query.set('decodeStatus', filters.decodeStatus);
+  if (filters.field) query.set('field', filters.field);
+  return request(`/api/v1/tasks/${encodeURIComponent(id)}/objects?${query}`);
+}
+
+export function getKubernetesObject(id: string, objectId: number): Promise<KubernetesObject> {
+  return request(`/api/v1/tasks/${encodeURIComponent(id)}/objects/${objectId}`);
+}
+
+export function listObjectRevisions(id: string, objectId: number): Promise<ObjectRevisionResult> {
+  return request(`/api/v1/tasks/${encodeURIComponent(id)}/objects/${objectId}/revisions?pageSize=100`);
 }

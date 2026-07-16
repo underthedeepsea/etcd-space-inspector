@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	backend "etcd-analyzer/internal/backend/bbolt"
+	"etcd-analyzer/internal/kube"
 	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/task"
 )
@@ -34,6 +35,30 @@ func TestWriteHTMLEscapesKeysAndOmitsValue(t *testing.T) {
 		if !strings.Contains(html, expected) {
 			t.Fatalf("report missing %q", expected)
 		}
+	}
+}
+
+func TestKubernetesReportShowsOnlySafeSemanticData(t *testing.T) {
+	var output bytes.Buffer
+	summary := Summary{
+		Task:       task.Task{Name: "kubernetes"},
+		Kubernetes: kube.Summary{SemanticAvailable: true, CurrentObjects: 2, CurrentBytes: 200},
+		TopResources: []kube.ResourceStat{{
+			APIGroup: "apps", Resource: "deployments", CurrentObjects: 1, CurrentBytes: 100,
+		}},
+		TopNamespaces: []kube.NamespaceStat{{Namespace: "prod", CurrentObjects: 1, CurrentBytes: 100}},
+		TopObjects: []kube.ObjectRecord{{
+			Identity:     kube.Identity{APIGroup: "apps", Resource: "deployments", Namespace: "prod", DisplayName: "redacted:0123456789ab"},
+			CurrentBytes: 100, LargestFieldPath: "status", LargestFieldBytes: 80,
+		}},
+	}
+	if err := WriteHTML(context.Background(), &output, summary); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(output.Bytes(), []byte("super-secret-value")) ||
+		!bytes.Contains(output.Bytes(), []byte("redacted:0123456789ab")) ||
+		!bytes.Contains(output.Bytes(), []byte("Kubernetes objects")) {
+		t.Fatalf("unsafe or incomplete report: %s", output.Bytes())
 	}
 }
 
