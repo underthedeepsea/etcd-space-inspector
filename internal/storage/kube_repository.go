@@ -65,6 +65,21 @@ ON CONFLICT(task_id) DO UPDATE SET
 	return nil
 }
 
+// EnsureUnavailable creates the M4 fallback summary when upgrading an M3 task.
+func (r *KubeRepository) EnsureUnavailable(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `
+INSERT OR IGNORE INTO kube_summaries (
+  task_id, semantic_available, current_objects, current_bytes, historical_bytes,
+  decoded_json, decoded_protobuf, encrypted, decode_failures
+)
+SELECT ?, 0, 0, 0, 0, 0, 0, 0, 0
+WHERE EXISTS (SELECT 1 FROM mvcc_summaries WHERE task_id = ?)`, r.taskID, r.taskID)
+	if err != nil {
+		return fmt.Errorf("ensure unavailable Kubernetes summary: %w", err)
+	}
+	return nil
+}
+
 // Summary returns task-level Kubernetes semantic totals.
 func (r *KubeRepository) Summary(ctx context.Context) (kube.Summary, error) {
 	var item kube.Summary
@@ -122,6 +137,39 @@ ORDER BY current_bytes DESC, historical_bytes DESC, namespace LIMIT ?`, r.taskID
 		var item kube.NamespaceStat
 		if err := rows.Scan(&item.Namespace, &item.CurrentObjects, &item.CurrentBytes, &item.HistoricalBytes); err != nil {
 			return nil, fmt.Errorf("scan Kubernetes namespace: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// TopFields returns the largest fields from each current object revision.
+func (r *KubeRepository) TopFields(ctx context.Context, limit int) ([]kube.TopFieldStat, error) {
+	if limit < 1 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT objects.api_group, objects.resource, objects.namespace, objects.display_name,
+       fields.path, fields.byte_size, fields.type_class
+FROM kube_object_records objects
+JOIN kube_revision_records revisions ON revisions.id = (
+  SELECT candidate.id FROM kube_revision_records candidate
+  WHERE candidate.task_id = objects.task_id AND candidate.key_hash = objects.key_hash
+  ORDER BY candidate.main_revision DESC, candidate.sub_revision DESC LIMIT 1
+)
+JOIN kube_field_records fields ON fields.kube_revision_id = revisions.id
+WHERE objects.task_id = ? AND objects.present = 1
+ORDER BY fields.byte_size DESC, objects.id, fields.path LIMIT ?`, r.taskID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("select Kubernetes top fields: %w", err)
+	}
+	defer rows.Close()
+	items := []kube.TopFieldStat{}
+	for rows.Next() {
+		var item kube.TopFieldStat
+		if err := rows.Scan(&item.APIGroup, &item.Resource, &item.Namespace, &item.DisplayName,
+			&item.Path, &item.ByteSize, &item.TypeClass); err != nil {
+			return nil, fmt.Errorf("scan Kubernetes top field: %w", err)
 		}
 		items = append(items, item)
 	}

@@ -80,6 +80,17 @@ type NamespaceStat struct {
 	HistoricalBytes int64  `json:"historicalBytes"`
 }
 
+// TopFieldStat identifies a large current field without retaining its content.
+type TopFieldStat struct {
+	APIGroup    string `json:"apiGroup"`
+	Resource    string `json:"resource"`
+	Namespace   string `json:"namespace"`
+	DisplayName string `json:"displayName"`
+	Path        string `json:"path"`
+	ByteSize    int64  `json:"byteSize"`
+	TypeClass   string `json:"typeClass"`
+}
+
 // Summary contains task-level Kubernetes semantic totals.
 type Summary struct {
 	SemanticAvailable bool  `json:"semanticAvailable"`

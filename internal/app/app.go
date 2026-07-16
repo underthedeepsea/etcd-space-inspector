@@ -45,8 +45,8 @@ func NewM2(dataDir string, batchSize int) *Application {
 	return application
 }
 
-// NewM3 creates an application with physical and version-gated MVCC analysis.
-func NewM3(dataDir string, batchSize, workers, channelSize int) *Application {
+// NewM4 creates an application with physical, MVCC, and Kubernetes analysis.
+func NewM4(dataDir string, batchSize, workers, channelSize int) *Application {
 	application := New(dataDir, nil)
 	application.stages = []task.Stage{
 		PhysicalStage(application.manifests, batchSize),
@@ -54,6 +54,11 @@ func NewM3(dataDir string, batchSize, workers, channelSize int) *Application {
 		ReportStage(application.manifests),
 	}
 	return application
+}
+
+// NewM3 preserves the previous constructor name for callers upgrading in place.
+func NewM3(dataDir string, batchSize, workers, channelSize int) *Application {
+	return NewM4(dataDir, batchSize, workers, channelSize)
 }
 
 // ReportStage writes the private standalone HTML summary after analysis.
@@ -250,12 +255,19 @@ func (a *Application) RecoverInterrupted(ctx context.Context) error {
 		return err
 	}
 	for _, item := range items {
-		if item.Status != task.StatusRunning {
-			continue
-		}
 		db, err := storage.Open(a.databasePath(item.ID))
 		if err != nil {
 			return err
+		}
+		if err := storage.NewKubeRepository(db, item.ID).EnsureUnavailable(ctx); err != nil {
+			db.Close()
+			return err
+		}
+		if item.Status != task.StatusRunning {
+			if err := db.Close(); err != nil {
+				return fmt.Errorf("close migrated task database: %w", err)
+			}
+			continue
 		}
 		now := time.Now().UTC()
 		item.Status = task.StatusFailed
@@ -361,11 +373,14 @@ func (a *Application) WriteReport(ctx context.Context, id, outputPath string) er
 	if err != nil {
 		return err
 	}
-	db, err := storage.OpenReadOnly(a.databasePath(id))
+	db, err := storage.Open(a.databasePath(id))
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	if err := storage.NewKubeRepository(db, id).EnsureUnavailable(ctx); err != nil {
+		return err
+	}
 	summary, err := buildReportSummary(ctx, db, item)
 	if err != nil {
 		return err
@@ -412,10 +427,15 @@ func buildReportSummary(ctx context.Context, db *sql.DB, item task.Task) (report
 	if err != nil {
 		return report.Summary{}, err
 	}
+	fields, err := kubernetesRepository.TopFields(ctx, 20)
+	if err != nil {
+		return report.Summary{}, err
+	}
 	return report.Summary{
 		Task: item, Physical: physical, MVCC: semantic,
 		TopCurrentKeys: current.Items, TopHistoricalKeys: historical.Items, TopPrefixes: prefixes,
-		Kubernetes: kubernetesSummary, TopResources: resources, TopNamespaces: namespaces, TopObjects: objects.Items,
+		Kubernetes: kubernetesSummary, TopResources: resources, TopNamespaces: namespaces,
+		TopObjects: objects.Items, TopFields: fields,
 	}, nil
 }
 

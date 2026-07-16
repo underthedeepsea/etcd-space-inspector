@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 )
 
@@ -50,6 +51,53 @@ func TestApplicationCreatesRunsListsAndDeletesTask(t *testing.T) {
 	items, err = application.List(context.Background())
 	if err != nil || len(items) != 0 {
 		t.Fatalf("items=%+v err=%v", items, err)
+	}
+}
+
+func TestRecoverMigratesCompletedM3Task(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "input.db")
+	if err := os.WriteFile(source, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application := New(filepath.Join(root, "data"), nil)
+	created, err := application.Create(context.Background(), task.CreateRequest{
+		Name: "m3", SourcePath: source, InputType: "snapshot", MaxInputBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := storage.Open(application.databasePath(created.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO mvcc_summaries VALUES (?, 1, 1, 0, 1, 1, 0, 0, 0, 0)`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{
+		"kube_diff_records", "kube_field_records", "kube_revision_records", "kube_object_records",
+		"kube_resource_stats", "kube_namespace_stats", "kube_summaries",
+	} {
+		if _, err := db.Exec("DROP TABLE " + table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE name = '004_m4_kubernetes.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	created.Status = task.StatusCompleted
+	if err := application.manifests.Save(created); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.RecoverInterrupted(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := application.KubernetesSummary(context.Background(), created.ID)
+	if err != nil || summary.SemanticAvailable {
+		t.Fatalf("summary=%+v err=%v", summary, err)
 	}
 }
 

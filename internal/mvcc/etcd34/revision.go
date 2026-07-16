@@ -92,7 +92,7 @@ func decodeRecord(revisionKey, encodedValue []byte, analyzer *kube.Analyzer) (Sa
 		Tombstone: tombstone, ValueHash: hex.EncodeToString(valueHash[:]),
 	}
 	result := SafeRecord{Revision: revision}
-	if analyzer != nil {
+	if analyzer != nil && !tombstone {
 		result.Kubernetes = analyzer.Analyze(keyValue.Key, revision.KeyHash, keyValue.Value)
 		if result.Kubernetes != nil {
 			result.Kubernetes.MainRevision = main

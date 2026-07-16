@@ -77,7 +77,7 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "warning: listening on non-loopback address %s\n", settings.Server.Listen)
 	}
 
-	application := app.NewM3(settings.Server.DataDir, settings.Analysis.SQLiteBatchSize,
+	application := app.NewM4(settings.Server.DataDir, settings.Analysis.SQLiteBatchSize,
 		settings.Analysis.WorkerCount, settings.Analysis.ChannelSize)
 	if err := application.RecoverInterrupted(ctx); err != nil {
 		fmt.Fprintf(stderr, "recover interrupted tasks: %v\n", err)

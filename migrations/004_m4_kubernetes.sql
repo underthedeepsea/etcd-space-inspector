@@ -108,5 +108,6 @@ CREATE INDEX IF NOT EXISTS idx_kube_revision_status ON kube_revision_records(tas
 CREATE INDEX IF NOT EXISTS idx_kube_field_revision ON kube_field_records(task_id, key_hash, main_revision);
 CREATE INDEX IF NOT EXISTS idx_kube_object_resource ON kube_object_records(task_id, api_group, resource);
 CREATE INDEX IF NOT EXISTS idx_kube_object_namespace ON kube_object_records(task_id, namespace);
+CREATE INDEX IF NOT EXISTS idx_kube_object_status ON kube_object_records(task_id, decode_status);
 CREATE INDEX IF NOT EXISTS idx_kube_object_current ON kube_object_records(task_id, current_bytes DESC);
 CREATE INDEX IF NOT EXISTS idx_kube_object_history ON kube_object_records(task_id, historical_bytes DESC);

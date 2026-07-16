@@ -16,8 +16,14 @@ var selectedPaths = []string{
 	"metadata.managedFields",
 	"metadata.annotations",
 	"metadata.labels",
+	"metadata.creationTimestamp",
+	"metadata.deletionTimestamp",
 	"spec",
+	"spec.renewTime",
 	"status",
+	"status.heartbeatTime",
+	"lastTimestamp",
+	"eventTime",
 	"data",
 	"binaryData",
 }
@@ -62,7 +68,7 @@ func AnalyzeFields(object map[string]any) ([]FieldStat, error) {
 }
 
 func collectFields(value any, path string, selected map[string]bool, result *[]FieldStat) error {
-	if path != "" && !selected[path] {
+	if path != "" && path != "metadata" && !selected[path] {
 		field, err := summarizeField(path, value)
 		if err != nil {
 			return err

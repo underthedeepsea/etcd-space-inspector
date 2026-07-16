@@ -34,3 +34,60 @@ func TestCompareFieldsSortsAddedRemovedAndModifiedPaths(t *testing.T) {
 		t.Fatalf("diff=%+v", got)
 	}
 }
+
+func TestAnalyzeAndCompareClassifiesManagedFieldsOnly(t *testing.T) {
+	previous, err := AnalyzeFields(map[string]any{"metadata": map[string]any{
+		"name": "demo", "managedFields": []any{map[string]any{"manager": "old"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := AnalyzeFields(map[string]any{"metadata": map[string]any{
+		"name": "demo", "managedFields": []any{map[string]any{"manager": "new"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := CompareFields(previous, current)
+	if !diff.ManagedFieldsOnly || diff.StatusOnly || diff.TimestampOnly {
+		t.Fatalf("diff=%+v", diff)
+	}
+}
+
+func TestAnalyzeAndCompareClassifiesMetadataTimestampOnly(t *testing.T) {
+	previous, err := AnalyzeFields(map[string]any{"metadata": map[string]any{
+		"name": "demo", "creationTimestamp": "2026-01-01T00:00:00Z",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := AnalyzeFields(map[string]any{"metadata": map[string]any{
+		"name": "demo", "creationTimestamp": "2026-01-02T00:00:00Z",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := CompareFields(previous, current)
+	if !diff.TimestampOnly || diff.ManagedFieldsOnly || diff.StatusOnly {
+		t.Fatalf("diff=%+v", diff)
+	}
+}
+
+func TestAnalyzeAndCompareClassifiesSpecTimestampOnly(t *testing.T) {
+	previous, err := AnalyzeFields(map[string]any{"spec": map[string]any{
+		"holderIdentity": "controller", "renewTime": "2026-01-01T00:00:00Z",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := AnalyzeFields(map[string]any{"spec": map[string]any{
+		"holderIdentity": "controller", "renewTime": "2026-01-02T00:00:00Z",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := CompareFields(previous, current)
+	if !diff.TimestampOnly || diff.ManagedFieldsOnly || diff.StatusOnly {
+		t.Fatalf("diff=%+v", diff)
+	}
+}

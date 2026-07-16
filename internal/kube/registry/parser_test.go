@@ -14,12 +14,21 @@ func TestParseRegistryIdentity(t *testing.T) {
 		{"/registry/leases/kube-node-lease/node-a", Identity{StoragePrefix: "/registry/leases", APIGroup: "coordination.k8s.io", Resource: "leases", Namespace: "kube-node-lease", Name: "node-a", DisplayName: "node-a"}},
 		{"/registry/nodes/node-a", Identity{StoragePrefix: "/registry/nodes", Resource: "nodes", Name: "node-a", DisplayName: "node-a", ClusterScoped: true}},
 		{"/registry/example.io/widgets/default/demo", Identity{StoragePrefix: "/registry/example.io/widgets", APIGroup: "example.io", Resource: "widgets", Namespace: "default", Name: "demo", DisplayName: "demo", CRD: true}},
+		{"/registry/services/specs/default/api", Identity{StoragePrefix: "/registry/services/specs", Resource: "services", Namespace: "default", Name: "api", DisplayName: "api"}},
+		{"/registry/services/endpoints/default/api", Identity{StoragePrefix: "/registry/services/endpoints", Resource: "endpoints", Namespace: "default", Name: "api", DisplayName: "api"}},
 	}
 	for _, test := range tests {
 		got, ok := Parse(test.key, "0123456789abcdef")
 		if !ok || got != test.want {
 			t.Fatalf("key=%q got=%+v ok=%v want=%+v", test.key, got, ok, test.want)
 		}
+	}
+}
+
+func TestPartialBuiltInPathHasNoObjectName(t *testing.T) {
+	got, ok := Parse("/registry/pods/default", "hash")
+	if !ok || got.Resource != "pods" || got.Name != "" || got.ClusterScoped {
+		t.Fatalf("identity=%+v ok=%v", got, ok)
 	}
 }
 

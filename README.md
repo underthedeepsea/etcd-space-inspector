@@ -1,6 +1,6 @@
 # ETCD DBSize Analyzer
 
-ETCD DBSize Analyzer 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前版本为 M3 `0.3.0`：支持安全导入与任务管理、Generic bbolt 物理空间分析，以及经过版本门控的 etcd 3.4 MVCC revision、历史版本、tombstone、Prefix 和 Top Key 分析。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
+ETCD DBSize Analyzer 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前版本为 M4 `0.4.0`：支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析，以及 Kubernetes Resource、Namespace、对象、字段占用和相邻 revision 变化分析。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
 
 ## 构建
 
@@ -83,27 +83,46 @@ analysis-data/
 - `GET /api/v1/tasks/{id}/keys`
 - `GET /api/v1/tasks/{id}/keys/{key-id}`
 - `GET /api/v1/tasks/{id}/keys/{key-id}/revisions`
+- `GET /api/v1/tasks/{id}/kubernetes-summary`
+- `GET /api/v1/tasks/{id}/resources`
+- `GET /api/v1/tasks/{id}/namespaces`
+- `GET /api/v1/tasks/{id}/objects`
+- `GET /api/v1/tasks/{id}/objects/{object-id}`
+- `GET /api/v1/tasks/{id}/objects/{object-id}/revisions`
 
 任务 JSON 请求采用严格字段校验。进程重启时，遗留的 `running` 任务会被标为 `TASK_INTERRUPTED`，不会伪装成仍在运行。
 
 Key 列表支持 `prefix`、`minSize`、`minRevisions`、`tombstone`、`sort`、`order`、`page` 和 `pageSize` 查询。排序字段采用固定白名单，单页最多 500 条。
 
+Kubernetes 对象列表支持 `group`、`resource`、`namespace`、`minSize`、`minRevisions`、`decodeStatus`、`field`、`sort`、`order`、`page` 和 `pageSize`。字段类别限于 managedFields、annotations、labels、spec、status、data 和 binaryData；对象详情只返回字段路径、大小、类型、哈希和相邻 revision 的变化分类。
+
 ## 语义门控与安全边界
 
 物理分析适用于可被 bbolt 只读打开的输入。页面类型来自 bbolt 公开 Page API；Bucket 分配/使用量来自 `Bucket.Stats`，因此属于离线估算值。损坏或无法打开的文件会留下稳定错误码，源文件不会被修改。
 
-MVCC 解码仅在任务明确声明精确的 `3.4.x` 版本时启用。版本缺失、不是 3.4，或结构不匹配时，任务仍正常完成并记录 `semantic_decode_unavailable`，只保留 Generic bbolt 结论，不猜测语义。
+MVCC 与 Kubernetes 语义解码仅在任务明确声明精确的 `3.4.x` 版本时启用。版本缺失、不是 3.4，或结构不匹配时，任务仍正常完成并记录 `semantic_decode_unavailable`，只保留 Generic bbolt 结论，不猜测语义。
 
-原始 Value 仅在有界内存流水线中参与长度与 SHA-256 计算，不写入 SQLite、日志、API 或 HTML。持久化的 revision 仅包含 key、版本、大小、tombstone 与哈希元数据。
+Kubernetes Protobuf 解码契约固定使用 `k8s.io/api` 与 `k8s.io/apimachinery` `v0.26.15`。支持的内置类型为：
 
-本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，不解析 Kubernetes 资源语义，不采集日志、审计或 Prometheus 数据，也不进行 snapshot diff。
+- core/v1：Pod、Secret、ConfigMap、Service、Namespace、Node、Event、ServiceAccount、PersistentVolume、PersistentVolumeClaim；
+- apps/v1：Deployment、DaemonSet、StatefulSet、ReplicaSet；
+- batch/v1：Job、CronJob；
+- coordination.k8s.io/v1：Lease；
+- networking.k8s.io/v1：Ingress、NetworkPolicy；
+- storage.k8s.io/v1：StorageClass、CSINode。
+
+CRD JSON 使用结构化字段分析。每个 registry revision 会记录 `decoded_json`、`decoded_protobuf`、`encrypted`、`protobuf_unsupported`、`decode_failed`、`format_unknown` 或 `path_unknown` 状态；加密和不透明数据只提供大小证据，不会被描述为已解码。
+
+原始 Value 只在有界内存流水线中参与解码、长度与 SHA-256 计算，不写入 SQLite、日志、API 或 HTML。字段分析只持久化路径、字节数、类型和 SHA-256；Secret、ServiceAccount 等敏感资源在 Kubernetes 视图中使用 `redacted:<key-hash>` 名称。
+
+本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，也不采集日志、审计或 Prometheus 数据。`0.4.0` 只比较同一数据库内相邻 revision，不支持两个 Snapshot 之间的对比；双 Snapshot 对比将在 M5 开发。
 
 ## 验证
 
 ```bash
 make check
 make build
-bin/etcd-analyzer version   # 0.3.0
+bin/etcd-analyzer version   # 0.4.0
 
 # 可选的百万 revision 长测，不在默认测试门禁中运行
 ETCD_ANALYZER_LONG_TESTS=1 go test ./internal/integration -run TestMillionRevisions -v

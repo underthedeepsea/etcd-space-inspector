@@ -30,6 +30,11 @@ func (a *Analyzer) Analyze(key []byte, keyHash string, value []byte) *ObjectRevi
 		return nil
 	}
 	result := &ObjectRevision{KeyHash: keyHash, Identity: identity, ValueBytes: int64(len(value))}
+	if identity.Resource == "" || identity.Name == "" {
+		result.ContentType = "unknown"
+		result.DecodeStatus = StatusPathUnknown
+		return result
+	}
 	switch {
 	case bytes.HasPrefix(value, []byte("k8s:enc:")):
 		result.ContentType = "encrypted"

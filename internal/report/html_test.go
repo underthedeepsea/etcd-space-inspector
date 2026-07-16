@@ -51,13 +51,23 @@ func TestKubernetesReportShowsOnlySafeSemanticData(t *testing.T) {
 			Identity:     kube.Identity{APIGroup: "apps", Resource: "deployments", Namespace: "prod", DisplayName: "redacted:0123456789ab"},
 			CurrentBytes: 100, LargestFieldPath: "status", LargestFieldBytes: 80,
 		}},
+		TopFields: []kube.TopFieldStat{{
+			APIGroup: "apps", Resource: "deployments", Namespace: "prod",
+			DisplayName: "redacted:0123456789ab", Path: "status", ByteSize: 80,
+		}},
+		TopCurrentKeys: []mvcc.KeyRecord{{
+			KeyHash: "0123456789abcdef", KeyText: "/registry/secrets/default/db-password",
+		}},
+		TopPrefixes: []mvcc.PrefixStat{{Prefix: "/registry/secrets/default/db-password"}},
 	}
 	if err := WriteHTML(context.Background(), &output, summary); err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(output.Bytes(), []byte("super-secret-value")) ||
+		bytes.Contains(output.Bytes(), []byte("db-password")) ||
 		!bytes.Contains(output.Bytes(), []byte("redacted:0123456789ab")) ||
-		!bytes.Contains(output.Bytes(), []byte("Kubernetes objects")) {
+		!bytes.Contains(output.Bytes(), []byte("Kubernetes objects")) ||
+		!bytes.Contains(output.Bytes(), []byte("Top Kubernetes fields")) {
 		t.Fatalf("unsafe or incomplete report: %s", output.Bytes())
 	}
 }

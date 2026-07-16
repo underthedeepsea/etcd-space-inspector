@@ -69,7 +69,7 @@ func allPaths(paths []string, predicate func(string) bool) bool {
 func timestampOnly(paths []string) bool {
 	found := false
 	for _, path := range paths {
-		if path == "status" {
+		if path == "metadata" || path == "spec" || path == "status" {
 			continue
 		}
 		if !isTimestampPath(path) {

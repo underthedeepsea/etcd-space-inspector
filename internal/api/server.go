@@ -336,7 +336,14 @@ func pagination(request *http.Request, defaultSize int) (int, int, error) {
 		return 0, 0, err
 	}
 	pageSize, err := boundedInt(request.URL.Query().Get("pageSize"), defaultSize, 1, 500)
-	return page, pageSize, err
+	if err != nil {
+		return 0, 0, err
+	}
+	maximum := int(^uint(0) >> 1)
+	if page-1 > maximum/pageSize {
+		return 0, 0, fmt.Errorf("page offset out of range")
+	}
+	return page, pageSize, nil
 }
 
 func boundedInt(raw string, fallback, minimum, maximum int) (int, error) {

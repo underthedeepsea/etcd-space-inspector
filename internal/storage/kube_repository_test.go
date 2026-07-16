@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"etcd-analyzer/internal/kube"
@@ -100,5 +101,26 @@ func TestKubeRepositoryQueriesValueFreeObjects(t *testing.T) {
 	if err != nil || revisions.Total != 1 || len(revisions.Items) != 1 || len(revisions.Items[0].Fields) != 1 ||
 		len(revisions.Diffs) != 1 || !revisions.Diffs[0].StatusOnly {
 		t.Fatalf("revisions=%+v err=%v", revisions, err)
+	}
+	fields, err := repository.TopFields(ctx, 10)
+	if err != nil || len(fields) != 1 || fields[0].Path != "status" || fields[0].ByteSize != 80 {
+		t.Fatalf("fields=%+v err=%v", fields, err)
+	}
+	rows, err := db.Query(`EXPLAIN QUERY PLAN SELECT id FROM kube_object_records WHERE task_id = ? AND decode_status = ?`, "t1", kube.StatusDecodedProtobuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	usedStatusIndex := false
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		usedStatusIndex = usedStatusIndex || strings.Contains(detail, "idx_kube_object_status")
+	}
+	if !usedStatusIndex {
+		t.Fatal("decode status query did not use idx_kube_object_status")
 	}
 }

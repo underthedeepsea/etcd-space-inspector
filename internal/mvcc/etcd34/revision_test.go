@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"etcd-analyzer/internal/kube"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 )
 
@@ -63,6 +64,24 @@ func TestDecodeRecordDiscardsPlaintextValue(t *testing.T) {
 	}
 	if string(serialized) == "" || contains(serialized, []byte("super-secret-value")) {
 		t.Fatalf("plaintext retained: %s", serialized)
+	}
+}
+
+func TestDecodeTombstoneSkipsKubernetesValueAnalysis(t *testing.T) {
+	revisionKey := make([]byte, 17, 18)
+	binary.BigEndian.PutUint64(revisionKey[:8], 13)
+	revisionKey[8] = '_'
+	revisionKey = append(revisionKey, 't')
+	encoded, err := (&mvccpb.KeyValue{Key: []byte("/registry/pods/default/p"), ModRevision: 13}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := DecodeRecordWithAnalyzer(revisionKey, encoded, kube.NewAnalyzer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.Revision.Tombstone || record.Kubernetes != nil {
+		t.Fatalf("record=%+v", record)
 	}
 }
 

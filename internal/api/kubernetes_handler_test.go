@@ -71,6 +71,7 @@ func TestKubernetesRejectsInvalidObjectQueries(t *testing.T) {
 		"/api/v1/tasks/t1/objects?decodeStatus=plaintext",
 		"/api/v1/tasks/t1/objects?field=token",
 		"/api/v1/tasks/t1/objects?pageSize=501",
+		"/api/v1/tasks/t1/objects?page=9223372036854775807&pageSize=500",
 		"/api/v1/tasks/t1/objects?order=random",
 		"/api/v1/tasks/t1/objects/not-an-id",
 		"/api/v1/tasks/t1/objects/0/revisions",

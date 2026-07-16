@@ -8,9 +8,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	backend "etcd-analyzer/internal/backend/bbolt"
 	"etcd-analyzer/internal/kube"
+	"etcd-analyzer/internal/kube/registry"
 	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/task"
 )
@@ -27,6 +29,7 @@ type Summary struct {
 	TopResources      []kube.ResourceStat
 	TopNamespaces     []kube.NamespaceStat
 	TopObjects        []kube.ObjectRecord
+	TopFields         []kube.TopFieldStat
 }
 
 // WriteFile atomically replaces a private report file.
@@ -68,10 +71,43 @@ func WriteHTML(ctx context.Context, writer io.Writer, summary Summary) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := summaryTemplate.Execute(writer, summary); err != nil {
+	if err := summaryTemplate.Execute(writer, sanitizeSummary(summary)); err != nil {
 		return fmt.Errorf("render HTML report: %w", err)
 	}
 	return ctx.Err()
+}
+
+func sanitizeSummary(summary Summary) Summary {
+	summary.TopCurrentKeys = redactReportKeys(summary.TopCurrentKeys)
+	summary.TopHistoricalKeys = redactReportKeys(summary.TopHistoricalKeys)
+	summary.TopPrefixes = append([]mvcc.PrefixStat(nil), summary.TopPrefixes...)
+	for index := range summary.TopPrefixes {
+		identity, ok := registry.Parse(summary.TopPrefixes[index].Prefix, "")
+		if ok && identity.Sensitive && identity.Name != "" {
+			summary.TopPrefixes[index].Prefix = redactedRegistryPath(identity)
+		}
+	}
+	return summary
+}
+
+func redactReportKeys(items []mvcc.KeyRecord) []mvcc.KeyRecord {
+	result := append([]mvcc.KeyRecord(nil), items...)
+	for index := range result {
+		identity, ok := registry.Parse(result[index].KeyText, result[index].KeyHash)
+		if ok && identity.Sensitive && identity.Name != "" {
+			result[index].KeyText = redactedRegistryPath(identity)
+		}
+	}
+	return result
+}
+
+func redactedRegistryPath(identity registry.Identity) string {
+	parts := []string{strings.TrimSuffix(identity.StoragePrefix, "/")}
+	if identity.Namespace != "" {
+		parts = append(parts, identity.Namespace)
+	}
+	parts = append(parts, identity.DisplayName)
+	return strings.Join(parts, "/")
 }
 
 var summaryTemplate = template.Must(template.New("summary").Parse(`<!doctype html>
@@ -109,4 +145,5 @@ var summaryTemplate = template.Must(template.New("summary").Parse(`<!doctype htm
 {{if .TopResources}}<section><h2>Kubernetes resources</h2><table><thead><tr><th>API group</th><th>Resource</th><th>Objects</th><th>Current bytes</th><th>Historical bytes</th></tr></thead><tbody>{{range .TopResources}}<tr><td>{{.APIGroup}}</td><td>{{.Resource}}</td><td>{{.CurrentObjects}}</td><td>{{.CurrentBytes}}</td><td>{{.HistoricalBytes}}</td></tr>{{end}}</tbody></table></section>{{end}}
 {{if .TopNamespaces}}<section><h2>Kubernetes namespaces</h2><table><thead><tr><th>Namespace</th><th>Objects</th><th>Current bytes</th><th>Historical bytes</th></tr></thead><tbody>{{range .TopNamespaces}}<tr><td>{{if .Namespace}}{{.Namespace}}{{else}}(cluster-scoped){{end}}</td><td>{{.CurrentObjects}}</td><td>{{.CurrentBytes}}</td><td>{{.HistoricalBytes}}</td></tr>{{end}}</tbody></table></section>{{end}}
 {{if .TopObjects}}<section><h2>Kubernetes objects</h2><table><thead><tr><th>Group/resource</th><th>Namespace</th><th>Name</th><th>Current bytes</th><th>Historical bytes</th><th>Largest field</th></tr></thead><tbody>{{range .TopObjects}}<tr><td>{{.Identity.APIGroup}}/{{.Identity.Resource}}</td><td>{{if .Identity.Namespace}}{{.Identity.Namespace}}{{else}}(cluster-scoped){{end}}</td><td>{{.Identity.DisplayName}}</td><td>{{.CurrentBytes}}</td><td>{{.HistoricalBytes}}</td><td>{{.LargestFieldPath}} ({{.LargestFieldBytes}})</td></tr>{{end}}</tbody></table></section>{{end}}
+{{if .TopFields}}<section><h2>Top Kubernetes fields</h2><table><thead><tr><th>Group/resource</th><th>Namespace</th><th>Name</th><th>Path</th><th>Bytes</th><th>Type</th></tr></thead><tbody>{{range .TopFields}}<tr><td>{{.APIGroup}}/{{.Resource}}</td><td>{{if .Namespace}}{{.Namespace}}{{else}}(cluster-scoped){{end}}</td><td>{{.DisplayName}}</td><td>{{.Path}}</td><td>{{.ByteSize}}</td><td>{{.TypeClass}}</td></tr>{{end}}</tbody></table></section>{{end}}
 </body></html>`))

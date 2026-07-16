@@ -46,16 +46,20 @@ func Parse(keyText, keyHash string) (Identity, bool) {
 		return Identity{}, true
 	}
 	identity := Identity{}
-	if strings.Contains(parts[0], ".") && len(parts) >= 2 {
+	if parts[0] == "services" && len(parts) >= 2 && (parts[1] == "specs" || parts[1] == "endpoints") {
+		identity.Resource = map[string]string{"specs": "services", "endpoints": "endpoints"}[parts[1]]
+		identity.StoragePrefix = prefix[:len(prefix)-1] + "/services/" + parts[1]
+		assignBuiltInScope(&identity, parts[2:])
+	} else if strings.Contains(parts[0], ".") && len(parts) >= 2 {
 		identity.APIGroup, identity.Resource, identity.CRD = parts[0], parts[1], true
 		identity.StoragePrefix = prefix[:len(prefix)-1] + "/" + parts[0] + "/" + parts[1]
-		assignScope(&identity, parts[2:])
+		assignCRDScope(&identity, parts[2:])
 	} else {
 		identity.Resource = parts[0]
 		identity.APIGroup = apiGroups[identity.Resource]
 		identity.StoragePrefix = prefix[:len(prefix)-1] + "/" + identity.Resource
 		identity.ClusterScoped = clusterScoped[identity.Resource]
-		assignScope(&identity, parts[1:])
+		assignBuiltInScope(&identity, parts[1:])
 	}
 	identity.Sensitive = sensitive[identity.Resource]
 	identity.DisplayName = identity.Name
@@ -69,16 +73,28 @@ func Parse(keyText, keyHash string) (Identity, bool) {
 	return identity, true
 }
 
-func assignScope(identity *Identity, remainder []string) {
-	if identity.ClusterScoped || len(remainder) == 1 {
-		if len(remainder) > 0 {
-			identity.Name = remainder[len(remainder)-1]
+func assignBuiltInScope(identity *Identity, remainder []string) {
+	if identity.ClusterScoped {
+		if len(remainder) == 1 {
+			identity.Name = remainder[0]
 		}
-		identity.ClusterScoped = true
 		return
 	}
-	if len(remainder) >= 2 {
-		identity.Namespace = remainder[len(remainder)-2]
-		identity.Name = remainder[len(remainder)-1]
+	if len(remainder) > 0 {
+		identity.Namespace = remainder[0]
+	}
+	if len(remainder) == 2 {
+		identity.Name = remainder[1]
+	}
+}
+
+func assignCRDScope(identity *Identity, remainder []string) {
+	switch len(remainder) {
+	case 1:
+		identity.Name = remainder[0]
+		identity.ClusterScoped = true
+	case 2:
+		identity.Namespace = remainder[0]
+		identity.Name = remainder[1]
 	}
 }

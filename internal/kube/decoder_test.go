@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 )
 
 func TestAnalyzerDecodesJSONAndStorageProtobuf(t *testing.T) {
@@ -46,6 +47,44 @@ func TestAnalyzerClassifiesEncryptedAndUnsupportedValues(t *testing.T) {
 	}
 }
 
+func TestAnalyzerMarksPartialRegistryPathUnknown(t *testing.T) {
+	result := NewAnalyzer().Analyze([]byte("/registry/pods/default"), "hash", []byte("{\"kind\":\"Pod\"}"))
+	if result == nil || result.DecodeStatus != StatusPathUnknown || len(result.Fields) != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestAnalyzerRejectsUnlistedBuiltInProtobuf(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	codecs := serializer.NewCodecFactory(scheme)
+	endpoints := &corev1.Endpoints{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Endpoints"},
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default"},
+	}
+	value := encodeWithCodecs(t, codecs, endpoints, corev1.SchemeGroupVersion)
+	result := NewAnalyzer().Analyze([]byte("/registry/services/endpoints/default/api"), "hash", value)
+	if result == nil || result.Identity.Resource != "endpoints" || result.DecodeStatus != StatusProtobufUnsupported {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestAnalyzerDecodesServiceSpecsStoragePrefix(t *testing.T) {
+	service := &corev1.Service{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "api"}},
+	}
+	analyzer := NewAnalyzer()
+	value := encodeStorageProtobuf(t, analyzer, service, corev1.SchemeGroupVersion)
+	result := analyzer.Analyze([]byte("/registry/services/specs/default/api"), "hash", value)
+	if result == nil || result.Identity.Resource != "services" || result.DecodeStatus != StatusDecodedProtobuf {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestAnalyzerDoesNotReturnSecretPlaintext(t *testing.T) {
 	analyzer := NewAnalyzer()
 	value := []byte(`{"apiVersion":"v1","kind":"Secret","metadata":{"name":"db-password","namespace":"default"},"data":{"password":"super-secret-value"}}`)
@@ -61,11 +100,16 @@ func TestAnalyzerDoesNotReturnSecretPlaintext(t *testing.T) {
 
 func encodeStorageProtobuf(t *testing.T, analyzer *Analyzer, object runtime.Object, groupVersion runtime.GroupVersioner) []byte {
 	t.Helper()
-	info, ok := runtime.SerializerInfoForMediaType(analyzer.codecs.SupportedMediaTypes(), runtime.ContentTypeProtobuf)
+	return encodeWithCodecs(t, analyzer.codecs, object, groupVersion)
+}
+
+func encodeWithCodecs(t *testing.T, codecs serializer.CodecFactory, object runtime.Object, groupVersion runtime.GroupVersioner) []byte {
+	t.Helper()
+	info, ok := runtime.SerializerInfoForMediaType(codecs.SupportedMediaTypes(), runtime.ContentTypeProtobuf)
 	if !ok {
 		t.Fatal("protobuf serializer unavailable")
 	}
-	encoded, err := runtime.Encode(analyzer.codecs.EncoderForVersion(info.Serializer, groupVersion), object)
+	encoded, err := runtime.Encode(codecs.EncoderForVersion(info.Serializer, groupVersion), object)
 	if err != nil {
 		t.Fatal(err)
 	}

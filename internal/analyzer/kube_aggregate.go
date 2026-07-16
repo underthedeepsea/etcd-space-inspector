@@ -121,6 +121,7 @@ FROM kube_revision_records WHERE task_id = ?`
 type kubeRevisionRef struct {
 	id           int64
 	mainRevision int64
+	subRevision  int64
 }
 
 func materializeKubernetesDiffs(ctx context.Context, tx *sql.Tx, taskID string, batchSize int) error {
@@ -149,51 +150,63 @@ WHERE task_id = ? AND key_hash > ? ORDER BY key_hash LIMIT ?`, taskID, lastKey, 
 			return nil
 		}
 		for _, key := range keys {
-			if err := materializeKubernetesKeyDiffs(ctx, tx, taskID, key); err != nil {
+			if err := materializeKubernetesKeyDiffs(ctx, tx, taskID, key, batchSize); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func materializeKubernetesKeyDiffs(ctx context.Context, tx *sql.Tx, taskID, keyHash string) error {
-	rows, err := tx.QueryContext(ctx, `
-SELECT id, main_revision FROM kube_revision_records
-WHERE task_id = ? AND key_hash = ? ORDER BY main_revision, sub_revision`, taskID, keyHash)
-	if err != nil {
-		return fmt.Errorf("select Kubernetes revisions: %w", err)
-	}
-	revisions := []kubeRevisionRef{}
-	for rows.Next() {
-		var revision kubeRevisionRef
-		if err := rows.Scan(&revision.id, &revision.mainRevision); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan Kubernetes revision: %w", err)
-		}
-		revisions = append(revisions, revision)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close Kubernetes revisions: %w", err)
-	}
-	if len(revisions) < 2 {
-		return nil
-	}
-	previous, err := loadKubernetesFields(ctx, tx, revisions[0].id)
-	if err != nil {
-		return err
-	}
-	for index := 1; index < len(revisions); index++ {
-		current, err := loadKubernetesFields(ctx, tx, revisions[index].id)
+func materializeKubernetesKeyDiffs(ctx context.Context, tx *sql.Tx, taskID, keyHash string, batchSize int) error {
+	lastMain, lastSub := int64(0), int64(-1)
+	var previousRef kubeRevisionRef
+	hasPrevious := false
+	var previousFields []kube.FieldStat
+	for {
+		rows, err := tx.QueryContext(ctx, `
+SELECT id, main_revision, sub_revision FROM kube_revision_records
+WHERE task_id = ? AND key_hash = ?
+  AND (main_revision > ? OR (main_revision = ? AND sub_revision > ?))
+ORDER BY main_revision, sub_revision LIMIT ?`, taskID, keyHash, lastMain, lastMain, lastSub, batchSize)
 		if err != nil {
-			return err
+			return fmt.Errorf("select Kubernetes revisions: %w", err)
 		}
-		diff := kube.CompareFields(previous, current)
-		if err := insertKubernetesDiff(ctx, tx, taskID, keyHash, revisions[index-1], revisions[index], diff); err != nil {
-			return err
+		revisions := make([]kubeRevisionRef, 0, batchSize)
+		for rows.Next() {
+			var revision kubeRevisionRef
+			if err := rows.Scan(&revision.id, &revision.mainRevision, &revision.subRevision); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan Kubernetes revision: %w", err)
+			}
+			revisions = append(revisions, revision)
 		}
-		previous = current
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close Kubernetes revisions: %w", err)
+		}
+		if len(revisions) == 0 {
+			return nil
+		}
+		for index := range revisions {
+			currentRef := revisions[index]
+			currentFields, err := loadKubernetesFields(ctx, tx, currentRef.id)
+			if err != nil {
+				return err
+			}
+			if hasPrevious {
+				diff := kube.CompareFields(previousFields, currentFields)
+				if err := insertKubernetesDiff(ctx, tx, taskID, keyHash, previousRef, currentRef, diff); err != nil {
+					return err
+				}
+			}
+			previousRef = currentRef
+			hasPrevious = true
+			previousFields = currentFields
+			lastMain, lastSub = currentRef.mainRevision, currentRef.subRevision
+		}
+		if len(revisions) < batchSize {
+			return nil
+		}
 	}
-	return nil
 }
 
 func loadKubernetesFields(ctx context.Context, tx *sql.Tx, revisionID int64) ([]kube.FieldStat, error) {

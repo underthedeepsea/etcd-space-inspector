@@ -31,7 +31,11 @@ func TestRunServerStopsWithContext(t *testing.T) {
 	go func() {
 		done <- runServer(ctx, []string{"--data-dir", t.TempDir(), "--listen", "127.0.0.1:0"}, stdout, &stderr)
 	}()
-	<-stdout.ready
+	select {
+	case <-stdout.ready:
+	case code := <-done:
+		t.Fatalf("server exited before listening: code=%d stderr=%q", code, stderr.String())
+	}
 	cancel()
 	code := <-done
 	if code != 0 {
