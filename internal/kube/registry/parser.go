@@ -3,9 +3,20 @@ package registry
 
 import (
 	"strings"
-
-	"etcd-analyzer/internal/kube"
 )
+
+// Identity is the safe Kubernetes identity derived from an etcd registry key.
+type Identity struct {
+	StoragePrefix string `json:"storagePrefix"`
+	APIGroup      string `json:"apiGroup"`
+	Resource      string `json:"resource"`
+	Namespace     string `json:"namespace"`
+	Name          string `json:"name"`
+	DisplayName   string `json:"displayName"`
+	CRD           bool   `json:"crd"`
+	ClusterScoped bool   `json:"clusterScoped"`
+	Sensitive     bool   `json:"sensitive"`
+}
 
 var apiGroups = map[string]string{
 	"deployments": "apps", "daemonsets": "apps", "statefulsets": "apps", "replicasets": "apps",
@@ -25,16 +36,16 @@ var sensitive = map[string]bool{
 }
 
 // Parse returns a safe identity for a Kubernetes registry key.
-func Parse(keyText, keyHash string) (kube.Identity, bool) {
+func Parse(keyText, keyHash string) (Identity, bool) {
 	const prefix = "/registry/"
 	if !strings.HasPrefix(keyText, prefix) {
-		return kube.Identity{}, false
+		return Identity{}, false
 	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(keyText, prefix), "/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
-		return kube.Identity{}, true
+		return Identity{}, true
 	}
-	identity := kube.Identity{}
+	identity := Identity{}
 	if strings.Contains(parts[0], ".") && len(parts) >= 2 {
 		identity.APIGroup, identity.Resource, identity.CRD = parts[0], parts[1], true
 		identity.StoragePrefix = prefix[:len(prefix)-1] + "/" + parts[0] + "/" + parts[1]
@@ -58,7 +69,7 @@ func Parse(keyText, keyHash string) (kube.Identity, bool) {
 	return identity, true
 }
 
-func assignScope(identity *kube.Identity, remainder []string) {
+func assignScope(identity *Identity, remainder []string) {
 	if identity.ClusterScoped || len(remainder) == 1 {
 		if len(remainder) > 0 {
 			identity.Name = remainder[len(remainder)-1]

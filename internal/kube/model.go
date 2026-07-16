@@ -1,6 +1,8 @@
 // Package kube defines Value-free Kubernetes analysis records.
 package kube
 
+import "etcd-analyzer/internal/kube/registry"
+
 const (
 	StatusDecodedJSON         = "decoded_json"
 	StatusDecodedProtobuf     = "decoded_protobuf"
@@ -12,17 +14,7 @@ const (
 )
 
 // Identity is the safe Kubernetes identity derived from an etcd registry key.
-type Identity struct {
-	StoragePrefix string `json:"storagePrefix"`
-	APIGroup      string `json:"apiGroup"`
-	Resource      string `json:"resource"`
-	Namespace     string `json:"namespace"`
-	Name          string `json:"name"`
-	DisplayName   string `json:"displayName"`
-	CRD           bool   `json:"crd"`
-	ClusterScoped bool   `json:"clusterScoped"`
-	Sensitive     bool   `json:"sensitive"`
-}
+type Identity = registry.Identity
 
 // FieldStat contains a structural path fingerprint without field content.
 type FieldStat struct {
