@@ -1,6 +1,6 @@
-# ETCD DBSize Analyzer
+# etcd Space Inspector
 
-ETCD DBSize Analyzer 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前版本为 M4 `0.4.0`：支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析，以及 Kubernetes Resource、Namespace、对象、字段占用和相邻 revision 变化分析。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
+etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前版本为 M4 `0.4.0`：支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析，以及 Kubernetes Resource、Namespace、对象、字段占用和相邻 revision 变化分析。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
 
 ## 构建
 
