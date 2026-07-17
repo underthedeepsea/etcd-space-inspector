@@ -100,6 +100,7 @@ Expected: Linux/macOS pass; Windows exposes any Unix permission or symlink assum
 ### Task 2: Make filesystem security tests portable
 
 **Files:**
+- Modify: `internal/storage/db.go`
 - Modify: `internal/task/service_test.go`
 - Modify: `internal/ingest/file_test.go`
 - Modify: `internal/storage/storage_test.go`
@@ -107,9 +108,41 @@ Expected: Linux/macOS pass; Windows exposes any Unix permission or symlink assum
 
 **Interfaces:**
 - Consumes: `runtime.GOOS`, Windows `t.TempDir()` paths, and existing production filesystem APIs.
-- Produces: tests that enforce Unix mode bits where supported and exercise the same import/analysis flow on native Windows paths.
+- Produces: SQLite DSNs that retain native Windows paths, plus tests that enforce Unix mode bits where supported and exercise the same import/analysis flow on native Windows paths.
 
-- [ ] **Step 1: Add explicit portable-path expectations to the task test**
+- [ ] **Step 1: Fix the SQLite DSN at the native-path boundary**
+
+Keep the existing `net/url` import for `url.Values`, but stop converting the filesystem path into a URL path. Build the driver DSN with the native path plus the encoded query:
+
+```go
+dsn := path + "?" + query.Encode()
+```
+
+Apply this line in both `Open` and `OpenReadOnly`. The modernc SQLite driver accepts native filenames with query parameters; this prevents a Windows drive letter from being parsed as a URL authority.
+
+- [ ] **Step 2: Run the local SQLite regression suite**
+
+Run:
+
+```bash
+go test ./internal/storage ./internal/analyzer ./internal/app ./internal/integration ./cmd/etcd-analyzer
+```
+
+Expected: PASS on macOS, proving the native DSN does not regress existing databases.
+
+- [ ] **Step 3: Commit, push, and isolate the next Windows failure**
+
+```bash
+git add internal/storage/db.go docs/plans/2026-07-17-windows-compatibility-implementation.md
+git commit -m "fix: preserve Windows paths in SQLite DSNs"
+git push origin release/0.5.0
+gh run list --branch release/0.5.0 --limit 1
+gh run watch <run-id> --exit-status
+```
+
+Expected: SQLite packages no longer report `SQL logic error: out of memory`; Windows may still fail only on Unix permission or symlink assumptions.
+
+- [ ] **Step 4: Add explicit portable-path expectations to the task test**
 
 Import `runtime`, then extend `TestServiceCreatesAndDeletesSecureTask`:
 
@@ -127,7 +160,7 @@ if runtime.GOOS != "windows" && dirInfo.Mode().Perm() != 0o700 {
 
 Remove the previous unconditional directory-mode assertion. The existing create, cancel, reload, and delete calls remain unchanged and verify manifest replacement on Windows.
 
-- [ ] **Step 2: Make file-mode and symlink setup assertions platform-aware**
+- [ ] **Step 5: Make file-mode and symlink setup assertions platform-aware**
 
 Import `runtime` in `internal/ingest/file_test.go`, then replace the copied-file mode assertion with:
 
@@ -145,11 +178,11 @@ if err := os.Symlink(source, link); err != nil {
 }
 ```
 
-- [ ] **Step 3: Guard the remaining Unix mode assertions**
+- [ ] **Step 6: Guard the remaining Unix mode assertions**
 
 Import `runtime` in `internal/storage/storage_test.go` and `internal/integration/m3_test.go`. Guard their `0o600` assertions with `runtime.GOOS != "windows"` exactly as in Step 2.
 
-- [ ] **Step 4: Run the local regression suite**
+- [ ] **Step 7: Run the local regression suite**
 
 Run:
 
@@ -159,7 +192,7 @@ go test ./internal/task ./internal/ingest ./internal/storage ./internal/integrat
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit and push the portable tests**
+- [ ] **Step 8: Commit and push the portable tests**
 
 ```bash
 git add internal/task/service_test.go internal/ingest/file_test.go internal/storage/storage_test.go internal/integration/m3_test.go
@@ -167,7 +200,7 @@ git commit -m "test: support native Windows filesystem semantics"
 git push origin release/0.5.0
 ```
 
-- [ ] **Step 6: Verify the Windows job passes the filesystem tests**
+- [ ] **Step 9: Verify the Windows job passes the filesystem tests**
 
 Run:
 
