@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dbInfo.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && dbInfo.Mode().Perm() != 0o600 {
 		t.Fatalf("database mode=%o", dbInfo.Mode().Perm())
 	}
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func TestCopyHashesWithoutChangingSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if copyInfo.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && copyInfo.Mode().Perm() != 0o600 {
 		t.Fatalf("copy mode=%o", copyInfo.Mode().Perm())
 	}
 }
@@ -101,7 +102,7 @@ func TestCopyRejectsSymlinkAndOversizeInput(t *testing.T) {
 	}
 	link := filepath.Join(dir, "source-link.db")
 	if err := os.Symlink(source, link); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlink creation unavailable: %v", err)
 	}
 	if _, err := Copy(context.Background(), link, filepath.Join(dir, "link-copy.db"), 10); err == nil {
 		t.Fatal("expected symlink rejection")
