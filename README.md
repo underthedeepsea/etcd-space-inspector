@@ -16,6 +16,35 @@ make build
 
 产物为 `bin/etcd-analyzer`，前端静态资源已嵌入二进制。
 
+Windows PowerShell：
+
+```powershell
+npm --prefix web ci
+.\check.ps1
+.\build.ps1
+```
+
+产物为 `bin\etcd-analyzer.exe`。Windows 路径可使用盘符路径或当前用户有权访问的 UNC 路径：
+
+```powershell
+.\bin\etcd-analyzer.exe analyze `
+  --input 'C:\data\snapshot.db' `
+  --type snapshot `
+  --output 'C:\data\analysis-data' `
+  --etcd-version 3.4.13
+
+.\bin\etcd-analyzer.exe server `
+  --data-dir 'C:\data\analysis-data' `
+  --listen 127.0.0.1:8080
+
+.\bin\etcd-analyzer.exe report `
+  --task '<task-id>' `
+  --data-dir 'C:\data\analysis-data' `
+  --output 'C:\data\report.html'
+```
+
+UNC 示例：`\\server\share\snapshot.db`。共享目录必须已由当前 Windows 用户授权访问，本工具不会挂载共享或处理登录凭据。
+
 ## CLI
 
 ```bash
