@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -27,11 +28,17 @@ func TestServiceCreatesAndDeletesSecureTask(t *testing.T) {
 	if created.SourceSHA256 == "" || created.SourceSize != 5 || created.Status != StatusPending {
 		t.Fatalf("created=%+v", created)
 	}
+	if created.SourcePath != "source/input.db" {
+		t.Fatalf("source path=%q", created.SourcePath)
+	}
+	if runtime.GOOS == "windows" && filepath.VolumeName(source) == "" {
+		t.Fatalf("expected drive-qualified Windows temp path: %q", source)
+	}
 	dirInfo, err := os.Stat(svc.TaskDir(created.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dirInfo.Mode().Perm() != 0o700 {
+	if runtime.GOOS != "windows" && dirInfo.Mode().Perm() != 0o700 {
 		t.Fatalf("task mode=%o", dirInfo.Mode().Perm())
 	}
 	if err := svc.Cancel(created.ID); err != nil {

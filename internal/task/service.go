@@ -83,7 +83,7 @@ func (s *Service) Get(id string) (Task, error) {
 	if err := validID(id); err != nil {
 		return Task{}, err
 	}
-	data, err := os.ReadFile(filepath.Join(s.TaskDir(id), "manifest.json"))
+	data, err := readManifest(filepath.Join(s.TaskDir(id), "manifest.json"))
 	if err != nil {
 		return Task{}, fmt.Errorf("read task manifest: %w", err)
 	}
@@ -92,6 +92,17 @@ func (s *Service) Get(id string) (Task, error) {
 		return Task{}, fmt.Errorf("decode task manifest: %w", err)
 	}
 	return result, nil
+}
+
+func readManifest(path string) ([]byte, error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		data, err := os.ReadFile(path)
+		if err == nil || os.IsNotExist(err) || attempt == 4 {
+			return data, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+	}
+	panic("unreachable")
 }
 
 // List reads all valid task manifests newest first.

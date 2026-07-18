@@ -27,7 +27,7 @@ func Open(path string) (*sql.DB, error) {
 	query := url.Values{}
 	query.Add("_pragma", "busy_timeout(5000)")
 	query.Add("_pragma", "journal_mode(WAL)")
-	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: query.Encode()}).String()
+	dsn := path + "?" + query.Encode()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -49,7 +49,7 @@ func OpenReadOnly(path string) (*sql.DB, error) {
 	query := url.Values{}
 	query.Set("mode", "ro")
 	query.Add("_pragma", "busy_timeout(5000)")
-	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: query.Encode()}).String()
+	dsn := path + "?" + query.Encode()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite read-only: %w", err)

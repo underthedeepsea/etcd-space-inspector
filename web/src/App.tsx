@@ -116,7 +116,7 @@ export default function App() {
         <h2 id="new-task-heading">New analysis task</h2>
         <form onSubmit={submit} className="task-form">
           <label>Task name<input name="name" required /></label>
-          <label>Local input path<input name="inputPath" required placeholder="/data/snapshot.db" /></label>
+          <label>Local input path<input name="inputPath" required placeholder={'C:\\data\\snapshot.db or /data/snapshot.db'} /></label>
           <label>Input type<select name="inputType"><option value="snapshot">Snapshot</option><option value="raw-db">Raw DB</option></select></label>
           <label>etcd version<input name="etcdVersion" placeholder="3.4.13" /></label>
           <button type="submit" disabled={busy}>Create task</button>

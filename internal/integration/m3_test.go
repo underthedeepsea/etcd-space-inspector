@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"etcd-analyzer/internal/app"
@@ -61,7 +62,7 @@ func TestM3EndToEndNoPlaintext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reportInfo.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && reportInfo.Mode().Perm() != 0o600 {
 		t.Fatalf("report mode=%o", reportInfo.Mode().Perm())
 	}
 }
