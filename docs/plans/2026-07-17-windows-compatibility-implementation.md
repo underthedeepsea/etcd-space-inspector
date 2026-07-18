@@ -101,6 +101,7 @@ Expected: Linux/macOS pass; Windows exposes any Unix permission or symlink assum
 
 **Files:**
 - Modify: `internal/storage/db.go`
+- Modify: `internal/task/service.go`
 - Modify: `internal/task/service_test.go`
 - Modify: `internal/ingest/file_test.go`
 - Modify: `internal/storage/storage_test.go`
@@ -142,7 +143,34 @@ gh run watch <run-id> --exit-status
 
 Expected: SQLite packages no longer report `SQL logic error: out of memory`; Windows may still fail only on Unix permission or symlink assumptions.
 
-- [ ] **Step 4: Add explicit portable-path expectations to the task test**
+- [ ] **Step 4: Retry transient manifest reads during atomic replacement**
+
+Route `Service.Get` through a private `readManifest` helper. Retry non-`IsNotExist` errors up to five times with a bounded linear 10 ms backoff; return successful reads, missing files, and the final error unchanged:
+
+```go
+func readManifest(path string) ([]byte, error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		data, err := os.ReadFile(path)
+		if err == nil || os.IsNotExist(err) || attempt == 4 {
+			return data, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+	}
+	panic("unreachable")
+}
+```
+
+This contains Windows sharing-violation handling at the single manifest read boundary and does not alter write atomicity.
+
+- [ ] **Step 5: Run the task and integration regressions**
+
+```bash
+go test ./internal/task ./internal/app ./internal/integration ./cmd/etcd-analyzer
+```
+
+Expected: PASS locally. Push the fix and confirm the native Windows integration test no longer reports “file is being used by another process.”
+
+- [ ] **Step 6: Add explicit portable-path expectations to the task test**
 
 Import `runtime`, then extend `TestServiceCreatesAndDeletesSecureTask`:
 
@@ -160,7 +188,7 @@ if runtime.GOOS != "windows" && dirInfo.Mode().Perm() != 0o700 {
 
 Remove the previous unconditional directory-mode assertion. The existing create, cancel, reload, and delete calls remain unchanged and verify manifest replacement on Windows.
 
-- [ ] **Step 5: Make file-mode and symlink setup assertions platform-aware**
+- [ ] **Step 7: Make file-mode and symlink setup assertions platform-aware**
 
 Import `runtime` in `internal/ingest/file_test.go`, then replace the copied-file mode assertion with:
 
@@ -178,11 +206,11 @@ if err := os.Symlink(source, link); err != nil {
 }
 ```
 
-- [ ] **Step 6: Guard the remaining Unix mode assertions**
+- [ ] **Step 8: Guard the remaining Unix mode assertions**
 
 Import `runtime` in `internal/storage/storage_test.go` and `internal/integration/m3_test.go`. Guard their `0o600` assertions with `runtime.GOOS != "windows"` exactly as in Step 2.
 
-- [ ] **Step 7: Run the local regression suite**
+- [ ] **Step 9: Run the local regression suite**
 
 Run:
 
@@ -192,15 +220,15 @@ go test ./internal/task ./internal/ingest ./internal/storage ./internal/integrat
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit and push the portable tests**
+- [ ] **Step 10: Commit and push the portable tests**
 
 ```bash
-git add internal/task/service_test.go internal/ingest/file_test.go internal/storage/storage_test.go internal/integration/m3_test.go
+git add internal/task/service.go internal/task/service_test.go internal/ingest/file_test.go internal/storage/storage_test.go internal/integration/m3_test.go docs/plans/2026-07-17-windows-compatibility-implementation.md
 git commit -m "test: support native Windows filesystem semantics"
 git push origin release/0.5.0
 ```
 
-- [ ] **Step 9: Verify the Windows job passes the filesystem tests**
+- [ ] **Step 11: Verify the Windows job passes the filesystem tests**
 
 Run:
 
