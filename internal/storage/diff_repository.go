@@ -48,9 +48,29 @@ type DiffRepository struct {
 	db *sql.DB
 }
 
+var _ domain.Sink = (*DiffRepository)(nil)
+
 // NewDiffRepository creates a comparison result repository.
 func NewDiffRepository(db *sql.DB) *DiffRepository {
 	return &DiffRepository{db: db}
+}
+
+// ResetResults clears an earlier calculation before bounded batches are stored.
+func (r *DiffRepository) ResetResults(ctx context.Context) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin diff reset: %w", err)
+	}
+	for _, table := range []string{"diff_summary", "diff_keys", "diff_prefixes", "diff_resources", "diff_namespaces"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("reset %s: %w", table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit diff reset: %w", err)
+	}
+	return nil
 }
 
 // DiffKeyQuery controls indexed key filtering and pagination.
@@ -189,6 +209,36 @@ INSERT INTO diff_keys (
 	return nil
 }
 
+// StoreKeys appends one bounded Key delta batch.
+func (r *DiffRepository) StoreKeys(ctx context.Context, items []domain.KeyDelta) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin diff key batch: %w", err)
+	}
+	statement, err := tx.PrepareContext(ctx, `
+INSERT INTO diff_keys (
+  key_hash, key_text, prefix, change_type, current_bytes_delta, historical_bytes_delta,
+  tombstone_bytes_delta, revision_count_delta, total_bytes_delta
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("prepare diff key batch: %w", err)
+	}
+	defer statement.Close()
+	for _, item := range items {
+		if _, err := statement.ExecContext(ctx, item.KeyHash, item.KeyText, item.Prefix, item.ChangeType,
+			item.CurrentBytesDelta, item.HistoricalBytesDelta, item.TombstoneBytesDelta,
+			item.RevisionCountDelta, item.TotalBytesDelta); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("insert diff key batch: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit diff key batch: %w", err)
+	}
+	return nil
+}
+
 // Keys returns a filtered, allow-listed page of Key deltas.
 func (r *DiffRepository) Keys(ctx context.Context, query DiffKeyQuery) (DiffKeyResult, error) {
 	sorts := map[string]string{
@@ -284,6 +334,32 @@ INSERT INTO diff_prefixes VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	return nil
 }
 
+// StorePrefixes appends one bounded Prefix delta batch.
+func (r *DiffRepository) StorePrefixes(ctx context.Context, items []domain.PrefixDelta) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin diff prefix batch: %w", err)
+	}
+	statement, err := tx.PrepareContext(ctx, `INSERT INTO diff_prefixes VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("prepare diff prefix batch: %w", err)
+	}
+	defer statement.Close()
+	for _, item := range items {
+		if _, err := statement.ExecContext(ctx, item.Prefix, item.CurrentKeyCountDelta, item.CurrentBytesDelta,
+			item.HistoricalVersionsDelta, item.HistoricalBytesDelta, item.TombstoneCountDelta,
+			item.TombstoneBytesDelta, item.TotalBytesDelta); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("insert diff prefix batch: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit diff prefix batch: %w", err)
+	}
+	return nil
+}
+
 // ReplaceResources atomically replaces Resource deltas.
 func (r *DiffRepository) ReplaceResources(ctx context.Context, items []domain.ResourceDelta) error {
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -313,6 +389,31 @@ func (r *DiffRepository) ReplaceResources(ctx context.Context, items []domain.Re
 	return nil
 }
 
+// StoreResources appends one bounded Resource delta batch.
+func (r *DiffRepository) StoreResources(ctx context.Context, items []domain.ResourceDelta) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin diff resource batch: %w", err)
+	}
+	statement, err := tx.PrepareContext(ctx, `INSERT INTO diff_resources VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("prepare diff resource batch: %w", err)
+	}
+	defer statement.Close()
+	for _, item := range items {
+		if _, err := statement.ExecContext(ctx, item.APIGroup, item.Resource, item.CurrentObjectsDelta,
+			item.CurrentBytesDelta, item.HistoricalBytesDelta, item.TotalBytesDelta); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("insert diff resource batch: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit diff resource batch: %w", err)
+	}
+	return nil
+}
+
 // ReplaceNamespaces atomically replaces Namespace deltas.
 func (r *DiffRepository) ReplaceNamespaces(ctx context.Context, items []domain.NamespaceDelta) error {
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -338,6 +439,31 @@ func (r *DiffRepository) ReplaceNamespaces(ctx context.Context, items []domain.N
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit diff namespaces: %w", err)
+	}
+	return nil
+}
+
+// StoreNamespaces appends one bounded Namespace delta batch.
+func (r *DiffRepository) StoreNamespaces(ctx context.Context, items []domain.NamespaceDelta) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin diff namespace batch: %w", err)
+	}
+	statement, err := tx.PrepareContext(ctx, `INSERT INTO diff_namespaces VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("prepare diff namespace batch: %w", err)
+	}
+	defer statement.Close()
+	for _, item := range items {
+		if _, err := statement.ExecContext(ctx, item.Namespace, item.CurrentObjectsDelta,
+			item.CurrentBytesDelta, item.HistoricalBytesDelta, item.TotalBytesDelta); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("insert diff namespace batch: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit diff namespace batch: %w", err)
 	}
 	return nil
 }
