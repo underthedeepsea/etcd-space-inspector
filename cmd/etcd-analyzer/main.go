@@ -16,6 +16,7 @@ import (
 	"etcd-analyzer/internal/api"
 	"etcd-analyzer/internal/app"
 	"etcd-analyzer/internal/config"
+	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 	"etcd-analyzer/internal/version"
@@ -28,7 +29,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: etcd-analyzer <version|analyze|report|server>")
+		fmt.Fprintln(stderr, "usage: etcd-analyzer <version|analyze|diff|report|server>")
 		return 2
 	}
 
@@ -38,6 +39,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "analyze":
 		return runAnalyze(args[1:], stdout, stderr)
+	case "diff":
+		return runDiff(args[1:], stdout, stderr)
 	case "report":
 		return runReport(args[1:], stdout, stderr)
 	case "server":
@@ -47,6 +50,68 @@ func run(args []string, stdout, stderr io.Writer) int {
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		return 2
+	}
+}
+
+func runDiff(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("diff", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	baselineID := flags.String("base", "", "baseline task ID")
+	targetID := flags.String("target", "", "target task ID")
+	dataDir := flags.String("data-dir", "./analysis-data", "analysis data directory")
+	name := flags.String("name", "", "comparison name")
+	if err := flags.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if *baselineID == "" || *targetID == "" {
+		fmt.Fprintln(stderr, "--base and --target are required")
+		return 2
+	}
+	if *name == "" {
+		*name = *baselineID + "-to-" + *targetID
+	}
+	settings, err := config.Load("")
+	if err != nil {
+		fmt.Fprintf(stderr, "load defaults: %v\n", err)
+		return 1
+	}
+	application := app.NewM5(*dataDir, settings.Analysis.SQLiteBatchSize,
+		settings.Analysis.WorkerCount, settings.Analysis.ChannelSize)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	created, err := application.CreateDiff(ctx, domain.CreateRequest{
+		Name: *name, BaselineTaskID: *baselineID, TargetTaskID: *targetID,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "create comparison: %v\n", err)
+		return 1
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		item, err := application.GetDiff(context.Background(), created.ID)
+		if err != nil {
+			fmt.Fprintf(stderr, "read comparison: %v\n", err)
+			return 1
+		}
+		switch item.Status {
+		case domain.StatusCompleted:
+			fmt.Fprintf(stdout, "%s %s\n", item.ID, item.Status)
+			return 0
+		case domain.StatusFailed, domain.StatusCancelled:
+			fmt.Fprintf(stderr, "%s %s: %s\n", item.ID, item.Status, item.ErrorMessage)
+			return 1
+		}
+		select {
+		case <-ctx.Done():
+			_ = application.CancelDiff(created.ID)
+			fmt.Fprintln(stderr, "comparison cancelled")
+			return 1
+		case <-ticker.C:
+		}
 	}
 }
 

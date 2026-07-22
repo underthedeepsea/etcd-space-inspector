@@ -8,7 +8,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"etcd-analyzer/internal/storage"
+	"etcd-analyzer/internal/task"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -102,4 +105,76 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 	if !strings.Contains(stderr.String(), "unknown command") {
 		t.Fatalf("stderr=%q", stderr.String())
 	}
+}
+
+func TestRunDiffRequiresBothTasks(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"diff", "--base", "base"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--base and --target are required") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
+func TestRunDiffCompletesComparison(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	baseline := createCLIComparisonTask(t, dataDir, "base", 100, time.Now().UTC())
+	target := createCLIComparisonTask(t, dataDir, "target", 175, time.Now().UTC().Add(time.Second))
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"diff", "--base", baseline.ID, "--target", target.ID, "--data-dir", dataDir}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "completed") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	manifests, err := filepath.Glob(filepath.Join(dataDir, "diffs", "*", "manifest.json"))
+	if err != nil || len(manifests) != 1 {
+		t.Fatalf("manifests=%v err=%v", manifests, err)
+	}
+}
+
+func createCLIComparisonTask(t *testing.T, dataDir, name string, size int64, createdAt time.Time) task.Task {
+	t.Helper()
+	source := filepath.Join(t.TempDir(), name+".db")
+	if err := os.WriteFile(source, []byte(name), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifests := task.NewService(dataDir)
+	item, err := manifests.Create(context.Background(), task.CreateRequest{
+		Name: name, SourcePath: source, InputType: "snapshot", EtcdVersion: "3.4.13", MaxInputBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.Status = task.StatusCompleted
+	item.CreatedAt = createdAt
+	if err := manifests.Save(item); err != nil {
+		t.Fatal(err)
+	}
+	db, err := storage.Open(filepath.Join(manifests.TaskDir(item.ID), "task.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO space_summaries VALUES (?, ?, 4096, 10, ?, 0, 0, 2, 1, 4, 1, 1, 1, 0)`, []any{item.ID, size, size}},
+		{`INSERT INTO mvcc_summaries VALUES (?, 1, 1, 0, 1, ?, 0, 0, 0, 0)`, []any{item.ID, size}},
+		{`INSERT INTO kube_summaries VALUES (?, 1, 1, ?, 0, 1, 0, 0, 0)`, []any{item.ID, size}},
+		{`INSERT INTO key_records (task_id, key_hash, key_text, prefix, present, create_revision, mod_revision, version, lease_id, current_key_bytes, current_value_bytes, current_stored_bytes, historical_versions, historical_bytes, tombstone_count, tombstone_bytes, revision_count, historical_amplification) VALUES (?, 'key', '/key', '/', 1, 1, 1, 1, 0, 0, ?, ?, 0, 0, 0, 0, 1, 0)`, []any{item.ID, size, size}},
+		{`INSERT INTO prefix_stats VALUES (?, '/', 1, 1, ?, 0, 0, 0, 0, ?)`, []any{item.ID, size, size}},
+		{`INSERT INTO kube_resource_stats VALUES (?, 'apps', 'deployments', 1, ?, 0)`, []any{item.ID, size}},
+		{`INSERT INTO kube_namespace_stats VALUES (?, 'prod', 1, ?, 0)`, []any{item.ID, size}},
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return item
 }
