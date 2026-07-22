@@ -82,23 +82,29 @@ func TestApplicationCancelRejectsNonRunningDiff(t *testing.T) {
 
 func TestRecoverInterruptedDiffs(t *testing.T) {
 	application := NewM5(filepath.Join(t.TempDir(), "data"), 10, 1, 1)
-	item, err := application.diffs.Create(domain.CreateRequest{Name: "interrupted", BaselineTaskID: "base", TargetTaskID: "target"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	item.Status = domain.StatusRunning
-	if err := application.diffs.Save(item); err != nil {
-		t.Fatal(err)
+	items := make([]domain.Comparison, 0, 2)
+	for _, status := range []domain.Status{domain.StatusPending, domain.StatusRunning} {
+		item, err := application.diffs.Create(domain.CreateRequest{Name: string(status), BaselineTaskID: "base", TargetTaskID: "target"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		item.Status = status
+		if err := application.diffs.Save(item); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
 	}
 	if err := application.RecoverInterrupted(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := application.GetDiff(context.Background(), item.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if recovered.Status != domain.StatusFailed || recovered.ErrorCode != "DIFF_INTERRUPTED" {
-		t.Fatalf("recovered=%+v", recovered)
+	for _, item := range items {
+		recovered, err := application.GetDiff(context.Background(), item.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recovered.Status != domain.StatusFailed || recovered.ErrorCode != "DIFF_INTERRUPTED" {
+			t.Fatalf("recovered=%+v", recovered)
+		}
 	}
 }
 

@@ -1,6 +1,6 @@
 # etcd Space Inspector
 
-etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前版本为 M4 `0.4.0`：支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析，以及 Kubernetes Resource、Namespace、对象、字段占用和相邻 revision 变化分析。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
+etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前版本为 M5 `0.5.0`：支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析，以及两个已完成 Snapshot 任务之间的持久化空间差分。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
 
 ## 构建
 
@@ -64,6 +64,12 @@ bin/etcd-analyzer analyze \
   --type raw-db \
   --output ./analysis-data
 
+# 比较两个已完成的分析任务
+bin/etcd-analyzer diff \
+  --base <baseline-task-id> \
+  --target <target-task-id> \
+  --data-dir ./analysis-data
+
 # 启动本地 Web UI
 bin/etcd-analyzer server \
   --data-dir ./analysis-data \
@@ -82,13 +88,17 @@ bin/etcd-analyzer report \
 
 ```text
 analysis-data/
-└── tasks/
-    └── <task-id>/
+├── tasks/
+│   └── <task-id>/
+│       ├── manifest.json
+│       ├── task.db
+│       ├── source/input.db
+│       ├── exports/report.html
+│       └── logs/
+└── diffs/
+    └── <diff-id>/
         ├── manifest.json
-        ├── task.db
-        ├── source/input.db
-        ├── exports/report.html
-        └── logs/
+        └── diff.db
 ```
 
 任务目录权限为 `0700`，输入副本、Manifest 与 SQLite 主文件为 `0600`。导入仅接受普通非 symlink 文件；复制过程支持取消和大小限制，失败时会清理部分副本。删除任务前会验证目标仍位于 `tasks/` 下。
@@ -118,12 +128,24 @@ analysis-data/
 - `GET /api/v1/tasks/{id}/objects`
 - `GET /api/v1/tasks/{id}/objects/{object-id}`
 - `GET /api/v1/tasks/{id}/objects/{object-id}/revisions`
+- `POST /api/v1/diffs`
+- `GET /api/v1/diffs`
+- `GET /api/v1/diffs/{id}`
+- `GET /api/v1/diffs/{id}/overview`
+- `GET /api/v1/diffs/{id}/keys`
+- `GET /api/v1/diffs/{id}/prefixes`
+- `GET /api/v1/diffs/{id}/resources`
+- `GET /api/v1/diffs/{id}/namespaces`
+- `POST /api/v1/diffs/{id}/cancel`
+- `DELETE /api/v1/diffs/{id}`
 
-任务 JSON 请求采用严格字段校验。进程重启时，遗留的 `running` 任务会被标为 `TASK_INTERRUPTED`，不会伪装成仍在运行。
+任务和差分 JSON 请求采用严格字段校验。进程重启时，遗留的 `running` 任务会被标为 `TASK_INTERRUPTED`，遗留的差分会被标为 `DIFF_INTERRUPTED`，不会伪装成仍在运行。
 
 Key 列表支持 `prefix`、`minSize`、`minRevisions`、`tombstone`、`sort`、`order`、`page` 和 `pageSize` 查询。排序字段采用固定白名单，单页最多 500 条。
 
 Kubernetes 对象列表支持 `group`、`resource`、`namespace`、`minSize`、`minRevisions`、`decodeStatus`、`field`、`sort`、`order`、`page` 和 `pageSize`。字段类别限于 managedFields、annotations、labels、spec、status、data 和 binaryData；对象详情只返回字段路径、大小、类型、哈希和相邻 revision 的变化分类。
+
+差分 Key 列表支持 `changeType`、`prefix`、`sort`、`order`、`page` 和 `pageSize`，其中 `changeType` 限于 `added`、`deleted` 和 `modified`。Prefix、Resource 和 Namespace 差分支持 `order` 与最大 500 条的 `limit`。
 
 ## 语义门控与安全边界
 
@@ -144,14 +166,16 @@ CRD JSON 使用结构化字段分析。每个 registry revision 会记录 `decod
 
 原始 Value 只在有界内存流水线中参与解码、长度与 SHA-256 计算，不写入 SQLite、日志、API 或 HTML。字段分析只持久化路径、字节数、类型和 SHA-256；Secret、ServiceAccount 等敏感资源在 Kubernetes 视图中使用 `redacted:<key-hash>` 名称。
 
-本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，也不采集日志、审计或 Prometheus 数据。`0.4.0` 只比较同一数据库内相邻 revision，不支持两个 Snapshot 之间的对比；双 Snapshot 对比将在 M5 开发。
+本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，也不采集日志、审计或 Prometheus 数据。`0.5.0` 可以比较两个已完成任务：物理结果在两侧都有 bbolt 分析数据时生成；MVCC 和 Kubernetes 差分只有在两侧语义结果可用且 etcd 主次版本兼容时生成，否则明确降级且不猜测。差分数据库只保存大小、计数、Key 标识和聚合增量，不保存原始 Value。
+
+双 Snapshot 差分可以定位增长来自当前有效数据、历史 revision、tombstone、空闲页、Key、Prefix、Resource 或 Namespace，但单凭 Snapshot 仍不能确定具体 Controller、客户端或用户身份；这需要后续日志和 Audit Log 关联能力。
 
 ## 验证
 
 ```bash
 make check
 make build
-bin/etcd-analyzer version   # 0.4.0
+bin/etcd-analyzer version   # 0.5.0
 
 # 可选的百万 revision 长测，不在默认测试门禁中运行
 ETCD_ANALYZER_LONG_TESTS=1 go test ./internal/integration -run TestMillionRevisions -v

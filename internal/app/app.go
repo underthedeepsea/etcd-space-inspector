@@ -302,7 +302,7 @@ func (a *Application) RecoverInterrupted(ctx context.Context) error {
 		return err
 	}
 	for _, item := range diffs {
-		if item.Status != domain.StatusRunning {
+		if item.Status != domain.StatusPending && item.Status != domain.StatusRunning {
 			continue
 		}
 		now := time.Now().UTC()

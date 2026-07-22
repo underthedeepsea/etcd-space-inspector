@@ -309,7 +309,8 @@ FROM key_records ORDER BY key_hash`)
 		if err != nil {
 			return err
 		}
-		if item.ChangeType == ChangeModified && item.TotalBytesDelta == 0 && item.RevisionCountDelta == 0 {
+		if item.ChangeType == ChangeModified && item.CurrentBytesDelta == 0 && item.HistoricalBytesDelta == 0 &&
+			item.TombstoneBytesDelta == 0 && item.RevisionCountDelta == 0 {
 			continue
 		}
 		batch = append(batch, item)

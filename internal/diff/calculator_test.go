@@ -120,6 +120,19 @@ func TestCalculatorClassifiesPresentToAbsentAsDeleted(t *testing.T) {
 	assertKeyDelta(t, sink.keys, "a", domain.ChangeDeleted, -100)
 }
 
+func TestCalculatorKeepsComponentChangesWhenTotalIsUnchanged(t *testing.T) {
+	baseline := comparisonTaskDB(t, taskFixture{physicalBytes: 1000, keys: []keyFixture{{hash: "a", text: "/a", prefix: "/", current: 100}}})
+	target := comparisonTaskDB(t, taskFixture{physicalBytes: 1000, keys: []keyFixture{{hash: "a", text: "/a", prefix: "/", historical: 100}}})
+	sink := &recordingSink{}
+	baseTask, targetTask := completedTasks()
+	if err := domain.NewCalculator(100).Compare(context.Background(), baseline, target, baseTask, targetTask, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.keys) != 1 || sink.keys[0].CurrentBytesDelta != -100 || sink.keys[0].HistoricalBytesDelta != 100 || sink.keys[0].TotalBytesDelta != 0 {
+		t.Fatalf("keys=%+v", sink.keys)
+	}
+}
+
 type taskFixture struct {
 	physicalBytes     int64
 	freeBytes         int64
@@ -132,9 +145,9 @@ type taskFixture struct {
 }
 
 type keyFixture struct {
-	hash, text, prefix string
-	current            int64
-	present            *bool
+	hash, text, prefix  string
+	current, historical int64
+	present             *bool
 }
 
 func comparisonTaskDB(t *testing.T, fixture taskFixture) *sql.DB {
@@ -162,7 +175,7 @@ func comparisonTaskDB(t *testing.T, fixture taskFixture) *sql.DB {
           task_id, key_hash, key_text, prefix, present, create_revision, mod_revision, version, lease_id,
           current_key_bytes, current_value_bytes, current_stored_bytes, historical_versions,
           historical_bytes, tombstone_count, tombstone_bytes, revision_count, historical_amplification
-		) VALUES ('task', ?, ?, ?, ?, 1, 1, 1, 0, 0, ?, ?, 0, 0, 0, 0, 1, 0)`, item.hash, item.text, item.prefix, present, item.current, item.current)
+		) VALUES ('task', ?, ?, ?, ?, 1, 1, 1, 0, 0, ?, ?, 0, ?, 0, 0, 1, 0)`, item.hash, item.text, item.prefix, present, item.current, item.current, item.historical)
 	}
 	mustExec(t, db, `INSERT INTO prefix_stats VALUES ('task', '/', 1, ?, ?, 0, 0, 0, 0, ?)`, len(fixture.keys), fixture.prefixBytes, fixture.prefixBytes)
 	mustExec(t, db, `INSERT INTO kube_resource_stats VALUES ('task', 'apps', 'deployments', 1, ?, 0)`, fixture.resourceBytes)

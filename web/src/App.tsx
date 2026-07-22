@@ -159,7 +159,7 @@ export default function App() {
     <main className="shell">
       <header>
         <p className="eyebrow">Offline forensics · v{__APP_VERSION__}</p>
-        <h1>ETCD DBSize Analyzer</h1>
+        <h1>etcd Space Inspector</h1>
         <p>Import an immutable local snapshot or raw backend copy and track its analysis.</p>
       </header>
 
