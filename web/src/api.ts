@@ -249,6 +249,97 @@ export interface ObjectFilters {
   sort: 'name' | 'current_bytes' | 'historical_bytes' | 'revision_count' | 'largest_field';
 }
 
+export interface Comparison {
+  diffId: string;
+  name: string;
+  baselineTaskId: string;
+  targetTaskId: string;
+  status: TaskStatus;
+  progress: number;
+  currentStage?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: string;
+}
+
+export interface CreateComparison {
+  name: string;
+  baselineTaskId: string;
+  targetTaskId: string;
+}
+
+export interface DiffSummary {
+  baselineTaskId: string;
+  targetTaskId: string;
+  physicalAvailable: boolean;
+  physicalUnavailableReason?: string;
+  mvccAvailable: boolean;
+  mvccUnavailableReason?: string;
+  kubernetesAvailable: boolean;
+  kubernetesUnavailableReason?: string;
+  physicalFileSizeDelta: number;
+  inUsePageBytesDelta: number;
+  freePageBytesDelta: number;
+  fragmentationRatioDelta: number;
+  revisionCountDelta: number;
+  currentKeyCountDelta: number;
+  currentStoredBytesDelta: number;
+  historicalVersionsDelta: number;
+  historicalBytesDelta: number;
+  tombstoneCountDelta: number;
+  tombstoneBytesDelta: number;
+  currentObjectsDelta: number;
+  kubernetesCurrentBytesDelta: number;
+  kubernetesHistoricalBytesDelta: number;
+  revisionRateAvailable: boolean;
+  averageRevisionsPerSecond?: number;
+}
+
+export interface DiffKey {
+  keyHash: string;
+  key: string;
+  prefix: string;
+  changeType: 'added' | 'deleted' | 'modified';
+  currentBytesDelta: number;
+  historicalBytesDelta: number;
+  tombstoneBytesDelta: number;
+  revisionCountDelta: number;
+  totalBytesDelta: number;
+}
+
+export interface DiffKeyResult {
+  items: DiffKey[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface DiffPrefix {
+  prefix: string;
+  currentKeyCountDelta: number;
+  currentBytesDelta: number;
+  historicalBytesDelta: number;
+  tombstoneBytesDelta: number;
+  totalBytesDelta: number;
+}
+
+export interface DiffResource {
+  apiGroup: string;
+  resource: string;
+  currentObjectsDelta: number;
+  currentBytesDelta: number;
+  historicalBytesDelta: number;
+  totalBytesDelta: number;
+}
+
+export interface DiffNamespace {
+  namespace: string;
+  currentObjectsDelta: number;
+  currentBytesDelta: number;
+  historicalBytesDelta: number;
+  totalBytesDelta: number;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -356,4 +447,48 @@ export function getKubernetesObject(id: string, objectId: number): Promise<Kuber
 
 export function listObjectRevisions(id: string, objectId: number): Promise<ObjectRevisionResult> {
   return request(`/api/v1/tasks/${encodeURIComponent(id)}/objects/${objectId}/revisions?pageSize=100`);
+}
+
+export async function listComparisons(): Promise<Comparison[]> {
+  const response = await request<{ items: Comparison[] }>('/api/v1/diffs');
+  return response.items;
+}
+
+export function createComparison(input: CreateComparison): Promise<Comparison> {
+  return request('/api/v1/diffs', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function getComparison(id: string): Promise<Comparison> {
+  return request(`/api/v1/diffs/${encodeURIComponent(id)}`);
+}
+
+export function cancelComparison(id: string): Promise<void> {
+  return request(`/api/v1/diffs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+}
+
+export function deleteComparison(id: string): Promise<void> {
+  return request(`/api/v1/diffs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function getDiffOverview(id: string): Promise<DiffSummary> {
+  return request(`/api/v1/diffs/${encodeURIComponent(id)}/overview`);
+}
+
+export function listDiffKeys(id: string, order: 'asc' | 'desc'): Promise<DiffKeyResult> {
+  return request(`/api/v1/diffs/${encodeURIComponent(id)}/keys?pageSize=20&sort=total_bytes&order=${order}`);
+}
+
+export async function listDiffPrefixes(id: string): Promise<DiffPrefix[]> {
+  const response = await request<{ items: DiffPrefix[] }>(`/api/v1/diffs/${encodeURIComponent(id)}/prefixes?limit=20&order=desc`);
+  return response.items;
+}
+
+export async function listDiffResources(id: string): Promise<DiffResource[]> {
+  const response = await request<{ items: DiffResource[] }>(`/api/v1/diffs/${encodeURIComponent(id)}/resources?limit=20&order=desc`);
+  return response.items;
+}
+
+export async function listDiffNamespaces(id: string): Promise<DiffNamespace[]> {
+  const response = await request<{ items: DiffNamespace[] }>(`/api/v1/diffs/${encodeURIComponent(id)}/namespaces?limit=20&order=desc`);
+  return response.items;
 }

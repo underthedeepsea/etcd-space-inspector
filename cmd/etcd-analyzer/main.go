@@ -142,14 +142,14 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "warning: listening on non-loopback address %s\n", settings.Server.Listen)
 	}
 
-	application := app.NewM4(settings.Server.DataDir, settings.Analysis.SQLiteBatchSize,
+	application := app.NewM5(settings.Server.DataDir, settings.Analysis.SQLiteBatchSize,
 		settings.Analysis.WorkerCount, settings.Analysis.ChannelSize)
 	if err := application.RecoverInterrupted(ctx); err != nil {
 		fmt.Fprintf(stderr, "recover interrupted tasks: %v\n", err)
 		return 1
 	}
 	handler := api.New(api.Dependencies{
-		Version: version.Value, Tasks: application, Analysis: application, MVCC: application, Kubernetes: application,
+		Version: version.Value, Tasks: application, Analysis: application, MVCC: application, Kubernetes: application, Diffs: application,
 		MaxInputBytes: settings.Security.MaxInputBytes, UI: web.Handler(),
 	})
 	listener, err := net.Listen("tcp", settings.Server.Listen)
