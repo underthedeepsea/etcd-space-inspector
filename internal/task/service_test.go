@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestServiceCreatesAndDeletesSecureTask(t *testing.T) {
@@ -64,4 +66,53 @@ func TestDeleteRejectsPathOutsideTaskRoot(t *testing.T) {
 	if err := svc.removeTaskPath("../outside"); err == nil {
 		t.Fatal("expected containment error")
 	}
+}
+
+func TestServiceRecordsDBVersionEvidence(t *testing.T) {
+	root := t.TempDir()
+	source := clusterVersionSource(t, root, "3.4.13")
+	svc := NewService(filepath.Join(root, "data"))
+
+	detected, err := svc.Create(context.Background(), CreateRequest{
+		Name: "detected", SourcePath: source, InputType: "snapshot", MaxInputBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detected.EtcdVersion != "3.4" || detected.EtcdVersionSource != "database_metadata" || detected.EtcdVersionExact || detected.DetectedEtcdVersion != "3.4" {
+		t.Fatalf("detected=%+v", detected)
+	}
+
+	manual, err := svc.Create(context.Background(), CreateRequest{
+		Name: "manual", SourcePath: source, InputType: "snapshot", EtcdVersion: "3.4.13", MaxInputBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manual.EtcdVersion != "3.4.13" || manual.EtcdVersionSource != "manual" || !manual.EtcdVersionExact || manual.DetectedEtcdVersion != "3.4" {
+		t.Fatalf("manual=%+v", manual)
+	}
+}
+
+func clusterVersionSource(t *testing.T, root, version string) string {
+	t.Helper()
+	path := filepath.Join(root, "etcd.db")
+	db, err := bolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucket([]byte("cluster"))
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte("clusterVersion"), []byte(version))
+	})
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

@@ -85,8 +85,8 @@ INSERT INTO findings (
 ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at`,
 		r.taskID+"-semantic-decode-unavailable", r.taskID,
 		"MVCC semantic analysis unavailable",
-		"The source version is not a confirmed etcd 3.4 release; physical bbolt results remain available.",
-		"Provide the exact etcd 3.4.x source version to enable semantic decoding.", time.Now().UTC().Format(time.RFC3339Nano))
+		"The source is not a manually confirmed etcd 3.4.x release or DB-confirmed 3.4 version family; physical bbolt results remain available.",
+		"Provide an exact etcd 3.4.x version or a database with confirmed 3.4 cluster metadata.", time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("save unavailable finding: %w", err)
 	}

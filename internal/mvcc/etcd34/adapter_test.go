@@ -9,12 +9,17 @@ import (
 
 func TestAdapterSupportsOnlyEtcd34AndDetectsKeyBucket(t *testing.T) {
 	adapter := Adapter{}
-	if !adapter.Supports("3.4.13") || !adapter.Supports("v3.4.44") {
+	if !adapter.Supports("3.4.13", "manual") || !adapter.Supports("v3.4.44", "manual") {
 		t.Fatal("expected 3.4 support")
 	}
-	for _, version := range []string{"", "3.4", "3.5.0", "3.6.0", "garbage"} {
-		if adapter.Supports(version) {
-			t.Fatalf("unexpected support for %q", version)
+	if !adapter.Supports("3.4", "database_metadata") {
+		t.Fatal("expected DB-confirmed 3.4 support")
+	}
+	for _, item := range []struct{ version, source string }{
+		{"", "unknown"}, {"3.4", "manual"}, {"3.5.0", "database_metadata"}, {"3.6.0", "manual"}, {"garbage", "manual"},
+	} {
+		if adapter.Supports(item.version, item.source) {
+			t.Fatalf("unexpected support for version=%q source=%q", item.version, item.source)
 		}
 	}
 	path := createBackend(t)

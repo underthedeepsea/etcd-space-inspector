@@ -18,7 +18,7 @@ import (
 
 func TestM3EndToEndNoPlaintext(t *testing.T) {
 	root := t.TempDir()
-	source := createEtcd34Fixture(t, root)
+	source := createEtcd34Fixture(t, root, true)
 	dataDir := filepath.Join(root, "data")
 	application := app.NewM3(dataDir, 2, 2, 2)
 	created, err := application.Create(context.Background(), task.CreateRequest{
@@ -69,7 +69,7 @@ func TestM3EndToEndNoPlaintext(t *testing.T) {
 
 func TestM3FallsBackWithoutConfirmedVersion(t *testing.T) {
 	root := t.TempDir()
-	source := createEtcd34Fixture(t, root)
+	source := createEtcd34Fixture(t, root, false)
 	dataDir := filepath.Join(root, "data")
 	application := app.NewM3(dataDir, 2, 1, 1)
 	created, err := application.Create(context.Background(), task.CreateRequest{
@@ -103,7 +103,30 @@ func TestM3FallsBackWithoutConfirmedVersion(t *testing.T) {
 	}
 }
 
-func createEtcd34Fixture(t *testing.T, root string) string {
+func TestM3AutoEnablesFromDatabaseMetadata(t *testing.T) {
+	root := t.TempDir()
+	source := createEtcd34Fixture(t, root, true)
+	application := app.NewM3(filepath.Join(root, "data"), 2, 1, 1)
+	created, err := application.Create(context.Background(), task.CreateRequest{
+		Name: "detected", SourcePath: source, InputType: "snapshot", MaxInputBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.EtcdVersion != "3.4" || created.EtcdVersionSource != task.VersionSourceDatabaseMetadata || created.EtcdVersionExact {
+		t.Fatalf("created=%+v", created)
+	}
+	if err := application.Start(context.Background(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, application, created.ID, task.StatusCompleted)
+	summary, err := application.MVCCSummary(context.Background(), created.ID)
+	if err != nil || !summary.SemanticAvailable || summary.RevisionCount != 4 {
+		t.Fatalf("summary=%+v err=%v", summary, err)
+	}
+}
+
+func createEtcd34Fixture(t *testing.T, root string, includeClusterVersion bool) string {
 	t.Helper()
 	path := filepath.Join(root, "etcd.db")
 	db, err := bolt.Open(path, 0o600, nil)
@@ -111,6 +134,15 @@ func createEtcd34Fixture(t *testing.T, root string) string {
 		t.Fatal(err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
+		if includeClusterVersion {
+			cluster, err := tx.CreateBucket([]byte("cluster"))
+			if err != nil {
+				return err
+			}
+			if err := cluster.Put([]byte("clusterVersion"), []byte("3.4.13")); err != nil {
+				return err
+			}
+		}
 		bucket, err := tx.CreateBucket([]byte("key"))
 		if err != nil {
 			return err

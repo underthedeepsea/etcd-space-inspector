@@ -28,11 +28,13 @@ func (r *Repository) CreateTask(ctx context.Context, item task.Task) error {
 	_, err := r.db.ExecContext(ctx, `
 INSERT INTO tasks (
   id, name, input_type, source_path, source_size, source_sha256, etcd_version,
+  etcd_version_source, etcd_version_exact, detected_etcd_version,
   status, progress, current_stage, error_code, error_message, created_at,
   started_at, completed_at, schema_version
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID, item.Name, item.InputType, item.SourcePath, item.SourceSize, item.SourceSHA256,
-		item.EtcdVersion, item.Status, item.Progress, item.CurrentStage, item.ErrorCode,
+		item.EtcdVersion, item.EtcdVersionSource, item.EtcdVersionExact, item.DetectedEtcdVersion,
+		item.Status, item.Progress, item.CurrentStage, item.ErrorCode,
 		item.ErrorMessage, formatTime(item.CreatedAt), formatOptionalTime(item.StartedAt),
 		formatOptionalTime(item.CompletedAt), item.SchemaVersion)
 	if err != nil {
@@ -49,11 +51,13 @@ func (r *Repository) GetTask(ctx context.Context, id string) (task.Task, error) 
 	var started, completed sql.NullString
 	err := r.db.QueryRowContext(ctx, `
 SELECT id, name, input_type, source_path, source_size, source_sha256, etcd_version,
+       etcd_version_source, etcd_version_exact, detected_etcd_version,
        status, progress, current_stage, error_code, error_message, created_at,
        started_at, completed_at, schema_version
 FROM tasks WHERE id = ?`, id).Scan(
 		&item.ID, &item.Name, &item.InputType, &item.SourcePath, &item.SourceSize,
-		&item.SourceSHA256, &item.EtcdVersion, &status, &item.Progress, &item.CurrentStage,
+		&item.SourceSHA256, &item.EtcdVersion, &item.EtcdVersionSource, &item.EtcdVersionExact, &item.DetectedEtcdVersion,
+		&status, &item.Progress, &item.CurrentStage,
 		&item.ErrorCode, &item.ErrorMessage, &created, &started, &completed, &item.SchemaVersion)
 	if err != nil {
 		return task.Task{}, fmt.Errorf("select task: %w", err)
@@ -76,11 +80,13 @@ func (r *Repository) UpdateTask(ctx context.Context, item task.Task) error {
 	result, err := r.db.ExecContext(ctx, `
 UPDATE tasks SET
   name = ?, input_type = ?, source_path = ?, source_size = ?, source_sha256 = ?,
-  etcd_version = ?, status = ?, progress = ?, current_stage = ?, error_code = ?,
+  etcd_version = ?, etcd_version_source = ?, etcd_version_exact = ?, detected_etcd_version = ?,
+  status = ?, progress = ?, current_stage = ?, error_code = ?,
   error_message = ?, started_at = ?, completed_at = ?, schema_version = ?
 WHERE id = ?`,
 		item.Name, item.InputType, item.SourcePath, item.SourceSize, item.SourceSHA256,
-		item.EtcdVersion, item.Status, item.Progress, item.CurrentStage, item.ErrorCode,
+		item.EtcdVersion, item.EtcdVersionSource, item.EtcdVersionExact, item.DetectedEtcdVersion,
+		item.Status, item.Progress, item.CurrentStage, item.ErrorCode,
 		item.ErrorMessage, formatOptionalTime(item.StartedAt), formatOptionalTime(item.CompletedAt),
 		item.SchemaVersion, item.ID)
 	if err != nil {

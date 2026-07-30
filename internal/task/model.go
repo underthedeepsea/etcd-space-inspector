@@ -30,6 +30,15 @@ var transitions = map[Status]map[Status]bool{
 	},
 }
 
+const (
+	// VersionSourceUnknown means no trusted version evidence was available.
+	VersionSourceUnknown = "unknown"
+	// VersionSourceManual means the operator supplied the version override.
+	VersionSourceManual = "manual"
+	// VersionSourceDatabaseMetadata means cluster metadata confirmed a version family.
+	VersionSourceDatabaseMetadata = "database_metadata"
+)
+
 // ValidateTransition rejects lifecycle transitions that lose task history.
 func ValidateTransition(from, to Status) error {
 	if !transitions[from][to] {
@@ -40,22 +49,25 @@ func ValidateTransition(from, to Status) error {
 
 // Task is the persisted task manifest and API model.
 type Task struct {
-	ID            string     `json:"taskId"`
-	Name          string     `json:"name"`
-	InputType     string     `json:"inputType"`
-	EtcdVersion   string     `json:"etcdVersion,omitempty"`
-	SourcePath    string     `json:"inputFile"`
-	SourceSize    int64      `json:"inputSize"`
-	SourceSHA256  string     `json:"sha256"`
-	Status        Status     `json:"status"`
-	Progress      float64    `json:"progress"`
-	CurrentStage  string     `json:"currentStage,omitempty"`
-	ErrorCode     string     `json:"errorCode,omitempty"`
-	ErrorMessage  string     `json:"errorMessage,omitempty"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	StartedAt     *time.Time `json:"startedAt,omitempty"`
-	CompletedAt   *time.Time `json:"completedAt,omitempty"`
-	SchemaVersion int        `json:"schemaVersion"`
+	ID                  string     `json:"taskId"`
+	Name                string     `json:"name"`
+	InputType           string     `json:"inputType"`
+	EtcdVersion         string     `json:"etcdVersion,omitempty"`
+	EtcdVersionSource   string     `json:"etcdVersionSource"`
+	EtcdVersionExact    bool       `json:"etcdVersionExact"`
+	DetectedEtcdVersion string     `json:"detectedEtcdVersion,omitempty"`
+	SourcePath          string     `json:"inputFile"`
+	SourceSize          int64      `json:"inputSize"`
+	SourceSHA256        string     `json:"sha256"`
+	Status              Status     `json:"status"`
+	Progress            float64    `json:"progress"`
+	CurrentStage        string     `json:"currentStage,omitempty"`
+	ErrorCode           string     `json:"errorCode,omitempty"`
+	ErrorMessage        string     `json:"errorMessage,omitempty"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	StartedAt           *time.Time `json:"startedAt,omitempty"`
+	CompletedAt         *time.Time `json:"completedAt,omitempty"`
+	SchemaVersion       int        `json:"schemaVersion"`
 }
 
 // CreateRequest describes a local input import.
