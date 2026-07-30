@@ -1,9 +1,7 @@
 package etcd34
 
 import (
-	"strconv"
-	"strings"
-
+	"etcd-analyzer/internal/etcdversion"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -13,15 +11,12 @@ type Adapter struct{}
 // Name returns the schema adapter identifier.
 func (Adapter) Name() string { return "etcd-3.4" }
 
-// Supports accepts only explicit 3.4 patch versions.
-func (Adapter) Supports(version string) bool {
-	version = strings.TrimPrefix(version, "v")
-	parts := strings.Split(version, ".")
-	if len(parts) != 3 || parts[0] != "3" || parts[1] != "4" {
-		return false
+// Supports accepts explicit 3.4 patch versions or DB-confirmed 3.4 metadata.
+func (Adapter) Supports(version, source string) bool {
+	if source == "database_metadata" {
+		return version == "3.4"
 	}
-	_, err := strconv.ParseUint(parts[2], 10, 32)
-	return err == nil
+	return etcdversion.IsExact34(version)
 }
 
 // Detect requires the etcd MVCC key bucket.

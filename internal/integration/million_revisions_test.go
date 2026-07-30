@@ -57,7 +57,7 @@ func TestMillionRevisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	sink := &countingSink{}
-	stats, err := mvcc.NewPipeline(4, 256, 1000).Run(context.Background(), path, "3.4.13", sink)
+	stats, err := mvcc.NewPipeline(4, 256, 1000).Run(context.Background(), path, "3.4.13", "manual", sink)
 	if err != nil {
 		t.Fatal(err)
 	}

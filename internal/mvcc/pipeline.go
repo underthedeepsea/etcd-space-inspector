@@ -53,9 +53,9 @@ func NewPipeline(workers, channelSize, batchSize int) *Pipeline {
 }
 
 // Run scans one read-only backend and blocks until no raw Value slice remains in flight.
-func (p *Pipeline) Run(ctx context.Context, sourcePath, version string, sink RevisionSink) (PipelineStats, error) {
+func (p *Pipeline) Run(ctx context.Context, sourcePath, version, versionSource string, sink RevisionSink) (PipelineStats, error) {
 	adapter := etcd34.Adapter{}
-	if !adapter.Supports(version) {
+	if !adapter.Supports(version, versionSource) {
 		return PipelineStats{}, ErrSemanticUnavailable
 	}
 	if err := sink.ResetMVCC(ctx); err != nil {

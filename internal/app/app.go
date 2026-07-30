@@ -139,7 +139,7 @@ func MVCCStage(manifests *task.Service, workers, channelSize, batchSize int) tas
 		defer db.Close()
 		repository := storage.NewMVCCRepository(db, taskContext.Task.ID)
 		stats, err := mvcc.NewPipeline(workers, channelSize, batchSize).Run(
-			ctx, sourcePath, taskContext.Task.EtcdVersion, repository)
+			ctx, sourcePath, taskContext.Task.EtcdVersion, taskContext.Task.EtcdVersionSource, repository)
 		if errors.Is(err, mvcc.ErrSemanticUnavailable) {
 			if resetErr := repository.ResetMVCC(ctx); resetErr != nil {
 				return resetErr

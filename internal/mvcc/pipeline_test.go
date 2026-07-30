@@ -16,7 +16,7 @@ import (
 func TestPipelineDecodesBoundedBatchesWithoutPlaintext(t *testing.T) {
 	path := createMVCCFixture(t)
 	sink := &revisionSink{}
-	stats, err := mvcc.NewPipeline(2, 2, 2).Run(context.Background(), path, "3.4.13", sink)
+	stats, err := mvcc.NewPipeline(2, 2, 2).Run(context.Background(), path, "3.4.13", "manual", sink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,9 +35,18 @@ func TestPipelineDecodesBoundedBatchesWithoutPlaintext(t *testing.T) {
 }
 
 func TestPipelineRejectsUnconfirmedVersion(t *testing.T) {
-	_, err := mvcc.NewPipeline(1, 1, 1).Run(context.Background(), "unused", "3.5.0", &revisionSink{})
+	_, err := mvcc.NewPipeline(1, 1, 1).Run(context.Background(), "unused", "3.5.0", "manual", &revisionSink{})
 	if !errors.Is(err, mvcc.ErrSemanticUnavailable) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestPipelineDecodesDatabaseConfirmedVersionFamily(t *testing.T) {
+	path := createMVCCFixture(t)
+	sink := &revisionSink{}
+	stats, err := mvcc.NewPipeline(1, 1, 1).Run(context.Background(), path, "3.4", "database_metadata", sink)
+	if err != nil || stats.Decoded != 4 || len(sink.records) != 4 {
+		t.Fatalf("stats=%+v records=%d err=%v", stats, len(sink.records), err)
 	}
 }
 
