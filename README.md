@@ -2,6 +2,8 @@
 
 etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前版本为 M5 `0.5.0`：支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析，以及两个已完成 Snapshot 任务之间的持久化空间差分。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
 
+发布版本、对应标签和分支规则见 [RELEASE.md](RELEASE.md)。
+
 ## 构建
 
 需要 Go 1.19+、Node.js 和 npm。
