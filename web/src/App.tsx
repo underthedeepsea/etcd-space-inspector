@@ -1,9 +1,20 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import {
   BucketStat,
+  cancelComparison,
+  Comparison,
+  createComparison,
   cancelTask,
   createTask,
   deleteTask,
+  deleteComparison,
+  DiffKeyResult,
+  DiffNamespace,
+  DiffPrefix,
+  DiffResource,
+  DiffSummary,
+  getComparison,
+  getDiffOverview,
   getKubernetesObject,
   getKubernetesSummary,
   getMVCCSummary,
@@ -12,6 +23,11 @@ import {
   KeyRecord,
   KeyResult,
   listBuckets,
+  listComparisons,
+  listDiffKeys,
+  listDiffNamespaces,
+  listDiffPrefixes,
+  listDiffResources,
   listKeyRevisions,
   listKeys,
   listNamespaces,
@@ -49,15 +65,30 @@ function formatBytes(value: number): string {
   return `${result.toFixed(1)} ${unit}`;
 }
 
+function formatSignedBytes(value: number): string {
+  if (value === 0) return '0 B';
+  return `${value > 0 ? '+' : '−'}${formatBytes(Math.abs(value))}`;
+}
+
+function formatSigned(value: number): string {
+  if (value === 0) return '0';
+  return `${value > 0 ? '+' : '−'}${Math.abs(value)}`;
+}
+
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [comparisons, setComparisons] = useState<Comparison[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [selectedTask, setSelectedTask] = useState<string | null>(null);
+  const [baselineTask, setBaselineTask] = useState<string | null>(null);
+  const [selectedDiff, setSelectedDiff] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setTasks(await listTasks());
+      const [nextTasks, nextComparisons] = await Promise.all([listTasks(), listComparisons()]);
+      setTasks(nextTasks);
+      setComparisons(nextComparisons);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to load tasks');
     }
@@ -104,11 +135,31 @@ export default function App() {
     }
   }
 
+  async function compare(target: Task) {
+    if (!baselineTask) return;
+    setBusy(true);
+    try {
+      const baseline = tasks.find((item) => item.taskId === baselineTask);
+      const created = await createComparison({
+        name: `${baseline?.name ?? baselineTask} → ${target.name}`,
+        baselineTaskId: baselineTask,
+        targetTaskId: target.taskId,
+      });
+      setSelectedDiff(created.diffId);
+      setMessage('Comparison started');
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to create comparison');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="shell">
       <header>
         <p className="eyebrow">Offline forensics · v{__APP_VERSION__}</p>
-        <h1>ETCD DBSize Analyzer</h1>
+        <h1>etcd Space Inspector</h1>
         <p>Import an immutable local snapshot or raw backend copy and track its analysis.</p>
       </header>
 
@@ -139,6 +190,8 @@ export default function App() {
                   <td>{new Date(task.createdAt).toLocaleString()}</td>
                   <td className="actions">
                     {task.status === 'completed' && <button onClick={() => setSelectedTask(task.taskId)}>Inspect</button>}
+                    {task.status === 'completed' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? void compare(task) : setBaselineTask(task.taskId)}>{baselineTask ? 'Compare' : 'Set baseline'}</button>}
+                    {task.status === 'completed' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>Baseline ✓</button>}
                     {task.status === 'pending' && <button disabled={busy} onClick={() => void action(() => startTask(task.taskId), 'Task started')}>Start</button>}
                     {task.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelTask(task.taskId), 'Cancellation requested')}>Cancel</button>}
                     {task.status !== 'running' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteTask(task.taskId), 'Task deleted')}>Delete</button>}
@@ -150,9 +203,111 @@ export default function App() {
           </table>
         </div>
       </section>
+      <section className="panel comparison-list" aria-labelledby="comparisons-heading">
+        <h2 id="comparisons-heading">Snapshot comparisons</h2>
+        <div className="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Progress</th><th>Created</th><th></th></tr></thead><tbody>
+          {comparisons.map((item) => <tr key={item.diffId}><td>{item.name}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td><progress max="1" value={item.progress} /></td><td>{new Date(item.createdAt).toLocaleString()}</td><td className="actions">{item.status === 'completed' && <button onClick={() => setSelectedDiff(item.diffId)}>Open</button>}{item.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelComparison(item.diffId), 'Comparison cancellation requested')}>Cancel</button>}{item.status !== 'running' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteComparison(item.diffId), 'Comparison deleted')}>Delete</button>}</td></tr>)}
+          {comparisons.length === 0 && <tr><td colSpan={5} className="empty">No comparisons yet.</td></tr>}
+        </tbody></table></div>
+      </section>
       {selectedTask && <PhysicalAnalysis taskId={selectedTask} onClose={() => setSelectedTask(null)} />}
+      {selectedDiff && <DiffAnalysis diffId={selectedDiff} onClose={() => setSelectedDiff(null)} />}
     </main>
   );
+}
+
+function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void }) {
+  const [comparison, setComparison] = useState<Comparison | null>(null);
+  const [summary, setSummary] = useState<DiffSummary | null>(null);
+  const [growth, setGrowth] = useState<DiffKeyResult | null>(null);
+  const [shrink, setShrink] = useState<DiffKeyResult | null>(null);
+  const [prefixes, setPrefixes] = useState<DiffPrefix[]>([]);
+  const [resources, setResources] = useState<DiffResource[]>([]);
+  const [namespaces, setNamespaces] = useState<DiffNamespace[]>([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+    async function load() {
+      try {
+        const nextComparison = await getComparison(diffId);
+        if (!active) return;
+        setComparison(nextComparison);
+        if (nextComparison.status === 'completed') {
+          const [nextSummary, nextGrowth, nextShrink, nextPrefixes, nextResources, nextNamespaces] = await Promise.all([
+            getDiffOverview(diffId), listDiffKeys(diffId, 'desc'), listDiffKeys(diffId, 'asc'),
+            listDiffPrefixes(diffId), listDiffResources(diffId), listDiffNamespaces(diffId),
+          ]);
+          if (!active) return;
+          setSummary(nextSummary); setGrowth(nextGrowth); setShrink(nextShrink);
+          setPrefixes(nextPrefixes); setResources(nextResources); setNamespaces(nextNamespaces); setError('');
+        } else if (nextComparison.status === 'pending' || nextComparison.status === 'running') {
+          timer = window.setTimeout(() => void load(), 1000);
+        }
+      } catch (reason) {
+        if (active) setError(reason instanceof Error ? reason.message : 'Unable to load comparison');
+      }
+    }
+    void load();
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [diffId]);
+
+  return <section className="panel analysis comparison" aria-labelledby="comparison-heading">
+    <div className="section-title"><h2 id="comparison-heading">Snapshot comparison</h2><button onClick={onClose}>Close</button></div>
+    {error && <p role="alert">{error}</p>}
+    {comparison && <p><strong>{comparison.name}</strong> · <span className={`badge ${comparison.status}`}>{comparison.status}</span> · {comparison.baselineTaskId} → {comparison.targetTaskId}</p>}
+    {comparison && comparison.status !== 'completed' && comparison.status !== 'failed' && comparison.status !== 'cancelled' && <p>Calculating… {Math.round(comparison.progress * 100)}%</p>}
+    {comparison?.errorMessage && <p className="notice">{comparison.errorMessage}</p>}
+    {summary && <>
+      <div className="metrics">
+        <Metric label="DB file" value={formatSignedBytes(summary.physicalFileSizeDelta)} />
+        <Metric label="Current data" value={formatSignedBytes(summary.currentStoredBytesDelta)} />
+        <Metric label="Historical revisions" value={formatSignedBytes(summary.historicalBytesDelta)} />
+        <Metric label="Tombstones" value={formatSignedBytes(summary.tombstoneBytesDelta)} />
+        <Metric label="Free pages" value={formatSignedBytes(summary.freePageBytesDelta)} />
+      </div>
+      {!summary.physicalAvailable && <p className="notice">Physical comparison unavailable: {summary.physicalUnavailableReason}</p>}
+      {!summary.mvccAvailable && <p className="notice">MVCC comparison unavailable: {summary.mvccUnavailableReason}. Physical results remain valid.</p>}
+      {!summary.kubernetesAvailable && <p className="notice">Kubernetes comparison unavailable: {summary.kubernetesUnavailableReason}</p>}
+      {summary.mvccAvailable && <div className="metrics">
+        <Metric label="Current keys" value={formatSigned(summary.currentKeyCountDelta)} />
+        <Metric label="Revision records" value={formatSigned(summary.revisionCountDelta)} />
+        <Metric label="Historical versions" value={formatSigned(summary.historicalVersionsDelta)} />
+        <Metric label="Tombstones" value={formatSigned(summary.tombstoneCountDelta)} />
+        <Metric label="Revision rate" value={summary.revisionRateAvailable ? `${summary.averageRevisionsPerSecond?.toFixed(2)} /s` : 'Unavailable'} />
+      </div>}
+
+      {summary.mvccAvailable && <>
+        <div className="ranking-grid">
+          <DiffKeyTable title="Top growth keys" result={growth} />
+          <DiffKeyTable title="Top shrinking keys" result={shrink} />
+        </div>
+        <h3>Prefix growth</h3>
+        <div className="table-wrap"><table><thead><tr><th>Prefix</th><th>Current</th><th>History</th><th>Tombstone</th><th>Total</th></tr></thead><tbody>
+          {prefixes.map((item) => <tr key={item.prefix}><td><code>{item.prefix}</code></td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td><td>{formatSignedBytes(item.tombstoneBytesDelta)}</td><td>{formatSignedBytes(item.totalBytesDelta)}</td></tr>)}
+        </tbody></table></div>
+      </>}
+
+      {summary.kubernetesAvailable && <div className="ranking-grid">
+        <div><h3>Resource growth</h3><div className="table-wrap"><table><thead><tr><th>Resource</th><th>Objects</th><th>Current</th><th>History</th></tr></thead><tbody>
+          {resources.map((item) => <tr key={`${item.apiGroup}/${item.resource}`}><td>{item.apiGroup || 'core'}/{item.resource}</td><td>{formatSigned(item.currentObjectsDelta)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td></tr>)}
+        </tbody></table></div></div>
+        <div><h3>Namespace growth</h3><div className="table-wrap"><table><thead><tr><th>Namespace</th><th>Objects</th><th>Current</th><th>History</th></tr></thead><tbody>
+          {namespaces.map((item) => <tr key={item.namespace || 'cluster-scoped'}><td>{item.namespace || '(cluster-scoped)'}</td><td>{formatSigned(item.currentObjectsDelta)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td></tr>)}
+        </tbody></table></div></div>
+      </div>}
+    </>}
+  </section>;
+}
+
+function DiffKeyTable({ title, result }: { title: string; result: DiffKeyResult | null }) {
+  return <div><h3>{title}</h3><div className="table-wrap"><table><thead><tr><th>Key</th><th>Change</th><th>Current</th><th>History</th><th>Total</th></tr></thead><tbody>
+    {result?.items.map((item) => <tr key={item.keyHash}><td><code>{item.key}</code></td><td>{item.changeType}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td><td>{formatSignedBytes(item.totalBytesDelta)}</td></tr>)}
+  </tbody></table></div></div>;
 }
 
 function PhysicalAnalysis({ taskId, onClose }: { taskId: string; onClose: () => void }) {

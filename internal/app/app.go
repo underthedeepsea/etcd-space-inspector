@@ -14,6 +14,7 @@ import (
 	"etcd-analyzer/internal/analyzer"
 	"etcd-analyzer/internal/apperr"
 	backend "etcd-analyzer/internal/backend/bbolt"
+	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/report"
 	"etcd-analyzer/internal/storage"
@@ -22,10 +23,13 @@ import (
 
 // Application coordinates local task operations.
 type Application struct {
-	manifests *task.Service
-	stages    []task.Stage
-	mu        sync.Mutex
-	running   map[string]runHandle
+	manifests     *task.Service
+	diffs         *domain.Service
+	stages        []task.Stage
+	diffBatchSize int
+	mu            sync.Mutex
+	running       map[string]runHandle
+	runningDiffs  map[string]runHandle
 }
 
 type runHandle struct {
@@ -35,7 +39,10 @@ type runHandle struct {
 
 // New creates an application rooted in dataDir.
 func New(dataDir string, stages []task.Stage) *Application {
-	return &Application{manifests: task.NewService(dataDir), stages: stages, running: make(map[string]runHandle)}
+	return &Application{
+		manifests: task.NewService(dataDir), diffs: domain.NewService(dataDir), stages: stages,
+		diffBatchSize: 500, running: make(map[string]runHandle), runningDiffs: make(map[string]runHandle),
+	}
 }
 
 // NewM2 creates an application with physical bbolt analysis enabled.
@@ -48,12 +55,18 @@ func NewM2(dataDir string, batchSize int) *Application {
 // NewM4 creates an application with physical, MVCC, and Kubernetes analysis.
 func NewM4(dataDir string, batchSize, workers, channelSize int) *Application {
 	application := New(dataDir, nil)
+	application.diffBatchSize = batchSize
 	application.stages = []task.Stage{
 		PhysicalStage(application.manifests, batchSize),
 		MVCCStage(application.manifests, workers, channelSize, batchSize),
 		ReportStage(application.manifests),
 	}
 	return application
+}
+
+// NewM5 creates an application with persistent two-task Snapshot comparison.
+func NewM5(dataDir string, batchSize, workers, channelSize int) *Application {
+	return NewM4(dataDir, batchSize, workers, channelSize)
 }
 
 // NewM3 preserves the previous constructor name for callers upgrading in place.
@@ -282,6 +295,23 @@ func (a *Application) RecoverInterrupted(ctx context.Context) error {
 		}
 		if closeErr != nil {
 			return fmt.Errorf("close recovered task database: %w", closeErr)
+		}
+	}
+	diffs, err := a.diffs.List()
+	if err != nil {
+		return err
+	}
+	for _, item := range diffs {
+		if item.Status != domain.StatusPending && item.Status != domain.StatusRunning {
+			continue
+		}
+		now := time.Now().UTC()
+		item.Status = domain.StatusFailed
+		item.ErrorCode = "DIFF_INTERRUPTED"
+		item.ErrorMessage = "comparison process stopped before completion"
+		item.CompletedAt = &now
+		if err := a.diffs.Save(item); err != nil {
+			return err
 		}
 	}
 	return nil

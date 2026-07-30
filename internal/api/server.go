@@ -12,7 +12,9 @@ import (
 	"strconv"
 	"strings"
 
+	"etcd-analyzer/internal/apperr"
 	backend "etcd-analyzer/internal/backend/bbolt"
+	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
@@ -47,6 +49,20 @@ type MVCCService interface {
 	Prefixes(context.Context, string, int) ([]mvcc.PrefixStat, error)
 }
 
+// DiffService is the M5 persistent comparison boundary.
+type DiffService interface {
+	CreateDiff(context.Context, domain.CreateRequest) (domain.Comparison, error)
+	ListDiffs(context.Context) ([]domain.Comparison, error)
+	GetDiff(context.Context, string) (domain.Comparison, error)
+	CancelDiff(string) error
+	DeleteDiff(string) error
+	DiffOverview(context.Context, string) (domain.Summary, error)
+	DiffKeys(context.Context, string, storage.DiffKeyQuery) (storage.DiffKeyResult, error)
+	DiffPrefixes(context.Context, string, storage.DiffDeltaQuery) ([]domain.PrefixDelta, error)
+	DiffResources(context.Context, string, storage.DiffDeltaQuery) ([]domain.ResourceDelta, error)
+	DiffNamespaces(context.Context, string, storage.DiffDeltaQuery) ([]domain.NamespaceDelta, error)
+}
+
 // Dependencies configure the API handler.
 type Dependencies struct {
 	Version       string
@@ -54,6 +70,7 @@ type Dependencies struct {
 	Analysis      AnalysisService
 	MVCC          MVCCService
 	Kubernetes    KubernetesService
+	Diffs         DiffService
 	MaxInputBytes int64
 	UI            http.Handler
 }
@@ -81,6 +98,14 @@ func (s *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	case "/api/v1/tasks":
 		s.handleTasks(writer, request)
+		return
+	case "/api/v1/diffs":
+		s.handleDiffs(writer, request)
+		return
+	}
+	const diffPrefix = "/api/v1/diffs/"
+	if strings.HasPrefix(request.URL.Path, diffPrefix) {
+		s.handleDiff(writer, request, strings.TrimPrefix(request.URL.Path, diffPrefix))
 		return
 	}
 	const prefix = "/api/v1/tasks/"
@@ -460,6 +485,18 @@ func ensureJSONEnd(decoder *json.Decoder) error {
 }
 
 func writeOperationError(writer http.ResponseWriter, err error) {
+	var coded *apperr.Error
+	if errors.As(err, &coded) {
+		status := http.StatusConflict
+		switch coded.Code {
+		case "DIFF_TASK_NOT_FOUND":
+			status = http.StatusNotFound
+		case "DIFF_SAME_TASK":
+			status = http.StatusBadRequest
+		}
+		writeError(writer, status, coded.Code, coded.Message)
+		return
+	}
 	if errors.Is(err, ErrNotFound) || os.IsNotExist(err) {
 		writeError(writer, http.StatusNotFound, "NOT_FOUND", "task not found")
 		return
