@@ -36,15 +36,19 @@ func TestRepositoryRoundTrip(t *testing.T) {
 
 	repo := NewRepository(db)
 	want := task.Task{
-		ID:            "t1",
-		Name:          "demo",
-		InputType:     "snapshot",
-		SourcePath:    "source/input.db",
-		SourceSize:    3,
-		SourceSHA256:  "abc",
-		Status:        task.StatusPending,
-		CreatedAt:     time.Unix(1, 0).UTC(),
-		SchemaVersion: 1,
+		ID:                  "t1",
+		Name:                "demo",
+		InputType:           "snapshot",
+		EtcdVersion:         "3.4.13",
+		EtcdVersionSource:   "manual",
+		EtcdVersionExact:    true,
+		DetectedEtcdVersion: "3.4",
+		SourcePath:          "source/input.db",
+		SourceSize:          3,
+		SourceSHA256:        "abc",
+		Status:              task.StatusPending,
+		CreatedAt:           time.Unix(1, 0).UTC(),
+		SchemaVersion:       1,
 	}
 	if err := repo.CreateTask(context.Background(), want); err != nil {
 		t.Fatal(err)
@@ -53,7 +57,7 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != want.ID || got.Status != want.Status || !got.CreatedAt.Equal(want.CreatedAt) {
+	if got.ID != want.ID || got.Status != want.Status || got.EtcdVersionSource != want.EtcdVersionSource || !got.EtcdVersionExact || got.DetectedEtcdVersion != want.DetectedEtcdVersion || !got.CreatedAt.Equal(want.CreatedAt) {
 		t.Fatalf("got=%+v", got)
 	}
 	want.Status = task.StatusRunning

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"etcd-analyzer/internal/etcdversion"
 	"etcd-analyzer/internal/ingest"
 )
 
@@ -59,17 +60,29 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Task, erro
 	if err != nil {
 		return Task{}, fmt.Errorf("import task source: %w", err)
 	}
+	detected := etcdversion.Detect(destination)
+	provided := strings.TrimSpace(request.EtcdVersion)
 	created := Task{
-		ID:            id,
-		Name:          strings.TrimSpace(request.Name),
-		InputType:     request.InputType,
-		EtcdVersion:   request.EtcdVersion,
-		SourcePath:    "source/input.db",
-		SourceSize:    meta.Size,
-		SourceSHA256:  meta.SHA256,
-		Status:        StatusPending,
-		CreatedAt:     time.Now().UTC(),
-		SchemaVersion: 1,
+		ID:                  id,
+		Name:                strings.TrimSpace(request.Name),
+		InputType:           request.InputType,
+		EtcdVersionSource:   VersionSourceUnknown,
+		DetectedEtcdVersion: detected.Family,
+		SourcePath:          "source/input.db",
+		SourceSize:          meta.Size,
+		SourceSHA256:        meta.SHA256,
+		Status:              StatusPending,
+		CreatedAt:           time.Now().UTC(),
+		SchemaVersion:       1,
+	}
+	if detected.Family != "" {
+		created.EtcdVersion = detected.Family
+		created.EtcdVersionSource = VersionSourceDatabaseMetadata
+	}
+	if provided != "" {
+		created.EtcdVersion = provided
+		created.EtcdVersionSource = VersionSourceManual
+		created.EtcdVersionExact = etcdversion.IsExact(provided)
 	}
 	if err := s.writeManifest(created); err != nil {
 		return Task{}, err
