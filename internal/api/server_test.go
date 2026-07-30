@@ -61,6 +61,22 @@ func TestTaskActionsAndStrictJSON(t *testing.T) {
 	}
 }
 
+func TestTaskListSerializesVersionEvidence(t *testing.T) {
+	tasks := &fakeTasks{items: []task.Task{{
+		ID:                  "detected",
+		Status:              task.StatusPending,
+		EtcdVersion:         "3.4",
+		EtcdVersionSource:   task.VersionSourceDatabaseMetadata,
+		DetectedEtcdVersion: "3.4",
+	}}}
+	h := New(Dependencies{Version: "0.1.0", Tasks: tasks, MaxInputBytes: 1024})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"etcdVersionSource":"database_metadata"`) || !strings.Contains(rr.Body.String(), `"etcdVersionExact":false`) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestSPAHandlesOnlyNonAPIGETRoutes(t *testing.T) {
 	ui := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusOK)

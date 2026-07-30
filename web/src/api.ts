@@ -5,6 +5,9 @@ export interface Task {
   name: string;
   inputType: string;
   etcdVersion?: string;
+  etcdVersionSource?: 'manual' | 'database_metadata' | 'unknown';
+  etcdVersionExact?: boolean;
+  detectedEtcdVersion?: string;
   inputFile: string;
   inputSize: number;
   sha256: string;

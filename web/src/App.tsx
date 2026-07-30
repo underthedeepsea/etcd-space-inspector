@@ -169,7 +169,7 @@ export default function App() {
           <label>Task name<input name="name" required /></label>
           <label>Local input path<input name="inputPath" required placeholder={'C:\\data\\snapshot.db or /data/snapshot.db'} /></label>
           <label>Input type<select name="inputType"><option value="snapshot">Snapshot</option><option value="raw-db">Raw DB</option></select></label>
-          <label>etcd version<input name="etcdVersion" placeholder="3.4.13" /></label>
+          <label>etcd version override (optional)<input name="etcdVersion" placeholder="3.4.13" /></label>
           <button type="submit" disabled={busy}>Create task</button>
         </form>
       </section>
@@ -184,7 +184,7 @@ export default function App() {
             <tbody>
               {tasks.map((task) => (
                 <tr key={task.taskId}>
-                  <td><strong>{task.name}</strong><small>{task.sha256.slice(0, 12)}</small></td>
+                  <td><strong>{task.name}</strong><small>{task.sha256.slice(0, 12)}</small><small>{versionEvidence(task)}</small></td>
                   <td>{task.inputType}</td><td>{formatBytes(task.inputSize)}</td><td><span className={`badge ${task.status}`}>{task.status}</span></td>
                   <td><progress max="1" value={task.progress}>{Math.round(task.progress * 100)}%</progress></td>
                   <td>{new Date(task.createdAt).toLocaleString()}</td>
@@ -543,4 +543,19 @@ function KubernetesAnalysis({ taskId }: { taskId: string }) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function versionEvidence(task: Task): string {
+  if (task.etcdVersionSource === 'database_metadata') {
+    return `DB metadata: ${task.etcdVersion} (patch unknown)`;
+  }
+  if (task.etcdVersionSource === 'manual') {
+    const version = task.etcdVersion ?? 'unknown';
+    const detected = task.detectedEtcdVersion;
+    if (detected && !version.replace(/^v/, '').startsWith(`${detected}.`)) {
+      return `Manual: ${version} · DB detected: ${detected}`;
+    }
+    return task.etcdVersionExact ? `Manual: ${version}` : `Manual: ${version} (unconfirmed)`;
+  }
+  return task.etcdVersion ? `Version: ${task.etcdVersion} (source unknown)` : 'Version: Unknown';
 }

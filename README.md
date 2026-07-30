@@ -54,6 +54,7 @@ UNC 示例：`\\server\share\snapshot.db`。共享目录必须已由当前 Windo
 bin/etcd-analyzer version
 
 # 导入 snapshot；源文件会被复制后再分析
+# --etcd-version 是可选的手动覆盖；未提供时会尝试读取 DB 元数据
 bin/etcd-analyzer analyze \
   --input ./snapshot.db \
   --type snapshot \
@@ -153,7 +154,7 @@ Kubernetes 对象列表支持 `group`、`resource`、`namespace`、`minSize`、`
 
 物理分析适用于可被 bbolt 只读打开的输入。页面类型来自 bbolt 公开 Page API；Bucket 分配/使用量来自 `Bucket.Stats`，因此属于离线估算值。损坏或无法打开的文件会留下稳定错误码，源文件不会被修改。
 
-MVCC 与 Kubernetes 语义解码仅在任务明确声明精确的 `3.4.x` 版本时启用。版本缺失、不是 3.4，或结构不匹配时，任务仍正常完成并记录 `semantic_decode_unavailable`，只保留 Generic bbolt 结论，不猜测语义。
+MVCC 与 Kubernetes 语义解码会在两种情况下启用：任务手动提供精确的 `3.4.x` 版本，或 DB 的 `cluster/clusterVersion` 元数据确认版本族为 `3.4`。后者只确认集群主/次版本，不会把 `3.4.0`、`3.4.13` 等值描述为 Server 二进制补丁版本。版本缺失、不是 3.4，或 `key` Bucket 结构不匹配时，任务仍正常完成并记录 `semantic_decode_unavailable`，只保留 Generic bbolt 结论，不猜测语义。
 
 Kubernetes Protobuf 解码契约固定使用 `k8s.io/api` 与 `k8s.io/apimachinery` `v0.26.15`。支持的内置类型为：
 
