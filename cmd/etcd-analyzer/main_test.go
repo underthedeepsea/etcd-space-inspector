@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 	bolt "go.etcd.io/bbolt"
@@ -117,22 +118,37 @@ func TestRunDiffRequiresBothTasks(t *testing.T) {
 	}
 }
 
+func TestRunDiffRejectsIncompleteObservationWindow(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"diff", "--base", "base", "--target", "target", "--baseline-observed-at", "2026-07-31T10:00:00Z"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "both observation times") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
 func TestRunDiffCompletesComparison(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
 	baseline := createCLIComparisonTask(t, dataDir, "base", 100, time.Now().UTC())
 	target := createCLIComparisonTask(t, dataDir, "target", 175, time.Now().UTC().Add(time.Second))
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"diff", "--base", baseline.ID, "--target", target.ID, "--data-dir", dataDir}, &stdout, &stderr)
+	code := run([]string{"diff", "--base", baseline.ID, "--target", target.ID, "--data-dir", dataDir,
+		"--baseline-observed-at", "2026-07-31T10:00:00Z", "--target-observed-at", "2026-07-31T12:00:00Z"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "completed") {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
-	manifests, err := filepath.Glob(filepath.Join(dataDir, "diffs", "*", "manifest.json"))
-	if err != nil || len(manifests) != 1 {
-		t.Fatalf("manifests=%v err=%v", manifests, err)
+	items, err := domain.NewService(dataDir).List()
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items=%v err=%v", items, err)
+	}
+	if items[0].BaselineObservedAt == nil || items[0].TargetObservedAt == nil ||
+		!items[0].TargetObservedAt.After(*items[0].BaselineObservedAt) {
+		t.Fatalf("item=%+v", items[0])
 	}
 }
 

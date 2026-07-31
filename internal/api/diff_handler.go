@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/storage"
@@ -28,9 +29,11 @@ func (s *server) handleDiffs(writer http.ResponseWriter, request *http.Request) 
 		writeJSON(writer, http.StatusOK, map[string]any{"items": items})
 	case http.MethodPost:
 		var input struct {
-			Name           string `json:"name"`
-			BaselineTaskID string `json:"baselineTaskId"`
-			TargetTaskID   string `json:"targetTaskId"`
+			Name               string `json:"name"`
+			BaselineTaskID     string `json:"baselineTaskId"`
+			TargetTaskID       string `json:"targetTaskId"`
+			BaselineObservedAt string `json:"baselineObservedAt"`
+			TargetObservedAt   string `json:"targetObservedAt"`
 		}
 		request.Body = http.MaxBytesReader(writer, request.Body, 1<<20)
 		decoder := json.NewDecoder(request.Body)
@@ -40,8 +43,14 @@ func (s *server) handleDiffs(writer http.ResponseWriter, request *http.Request) 
 			writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid comparison request")
 			return
 		}
+		baselineObservedAt, targetObservedAt, err := parseObservationTimes(input.BaselineObservedAt, input.TargetObservedAt)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid comparison request")
+			return
+		}
 		created, err := s.dependencies.Diffs.CreateDiff(request.Context(), domain.CreateRequest{
 			Name: input.Name, BaselineTaskID: input.BaselineTaskID, TargetTaskID: input.TargetTaskID,
+			BaselineObservedAt: baselineObservedAt, TargetObservedAt: targetObservedAt,
 		})
 		if err != nil {
 			writeOperationError(writer, err)
@@ -51,6 +60,27 @@ func (s *server) handleDiffs(writer http.ResponseWriter, request *http.Request) 
 	default:
 		methodNotAllowed(writer)
 	}
+}
+
+func parseObservationTimes(baseline, target string) (*time.Time, *time.Time, error) {
+	if baseline == "" && target == "" {
+		return nil, nil, nil
+	}
+	if baseline == "" || target == "" {
+		return nil, nil, fmt.Errorf("both observation times are required")
+	}
+	baselineTime, err := time.Parse(time.RFC3339, baseline)
+	if err != nil {
+		return nil, nil, err
+	}
+	targetTime, err := time.Parse(time.RFC3339, target)
+	if err != nil {
+		return nil, nil, err
+	}
+	if targetTime.Sub(baselineTime) < time.Second {
+		return nil, nil, fmt.Errorf("observation window must be at least one second")
+	}
+	return &baselineTime, &targetTime, nil
 }
 
 func (s *server) handleDiff(writer http.ResponseWriter, request *http.Request, remainder string) {
