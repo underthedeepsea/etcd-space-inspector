@@ -4,7 +4,7 @@
 
 | 版本与标签 | 发布分支 | 里程碑 | 主要能力 |
 | --- | --- | --- | --- |
-| `0.7.0`（开发中，尚未创建标签） | `release/0.7.0` | M7 | 单 Snapshot 的 Key 保留 revision 活跃度排行；双 Snapshot 的按 Key revision 增量与基于实际采集时间的每小时净保留 revision 速率。 |
+| `0.7.0` / `v0.7.0` | `release/0.7.0` | M7 | 单 Snapshot 的 Key 保留 revision 活跃度排行；双 Snapshot 的按 Key revision 增量与基于实际采集时间的每小时净保留 revision 速率。 |
 | `0.6.0` / `v0.6.0` | `release/0.6.0` | M6 | 从 DB 元数据识别 etcd 3.4 版本族；中英文界面、指标说明与大 Snapshot 默认参数优化。 |
 | `0.5.0` / `v0.5.0` | `release/0.5.0` | M5 | 对两个已完成 Snapshot 分析任务进行持久化空间差分，展示 Key、Prefix、Resource、Namespace 与 MVCC 增量；语义不兼容时明确降级。 |
 | `0.4.0` / `v0.4.0` | `m4-kubernetes-semantics`（历史） | M4 | Kubernetes Resource、Namespace、对象、字段和相邻 revision 增长分析。 |
