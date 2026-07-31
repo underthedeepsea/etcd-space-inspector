@@ -143,6 +143,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [selectedTask, setSelectedTask] = useState<string | null>(null);
   const [baselineTask, setBaselineTask] = useState<string | null>(null);
+	const [comparisonTarget, setComparisonTarget] = useState<Task | null>(null);
   const [selectedDiff, setSelectedDiff] = useState<string | null>(null);
   const [locale, setLocale] = useState<Locale>(() => resolveLocale(
     window.localStorage.getItem(languagePreferenceKey), window.navigator.language,
@@ -205,17 +206,27 @@ export default function App() {
     }
   }
 
-  async function compare(target: Task) {
-    if (!baselineTask) return;
+  function configureComparison(target: Task) {
+    if (baselineTask) setComparisonTarget(target);
+  }
+
+  async function compare(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+	if (!baselineTask || !comparisonTarget) return;
     setBusy(true);
+	const form = new FormData(event.currentTarget);
     try {
       const baseline = tasks.find((item) => item.taskId === baselineTask);
       const created = await createComparison({
-        name: `${baseline?.name ?? baselineTask} → ${target.name}`,
+		name: `${baseline?.name ?? baselineTask} → ${comparisonTarget.name}`,
         baselineTaskId: baselineTask,
-        targetTaskId: target.taskId,
+		targetTaskId: comparisonTarget.taskId,
+		...(String(form.get('baselineObservedAt') ?? '') ? { baselineObservedAt: new Date(String(form.get('baselineObservedAt'))).toISOString() } : {}),
+		...(String(form.get('targetObservedAt') ?? '') ? { targetObservedAt: new Date(String(form.get('targetObservedAt'))).toISOString() } : {}),
       });
       setSelectedDiff(created.diffId);
+		setBaselineTask(null);
+		setComparisonTarget(null);
       setMessage(t('comparisons.started'));
       await refresh();
     } catch (error) {
@@ -267,7 +278,7 @@ export default function App() {
                   <td>{formatDate(task.createdAt, locale)}</td>
                   <td className="actions">
                     {task.status === 'completed' && <button onClick={() => setSelectedTask(task.taskId)}>{t('tasks.inspect')}</button>}
-                    {task.status === 'completed' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? void compare(task) : setBaselineTask(task.taskId)}>{baselineTask ? t('tasks.compare') : t('tasks.setBaseline')}</button>}
+                    {task.status === 'completed' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? configureComparison(task) : setBaselineTask(task.taskId)}>{baselineTask ? t('tasks.compare') : t('tasks.setBaseline')}</button>}
                     {task.status === 'completed' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>{t('tasks.baseline')}</button>}
                     {task.status === 'pending' && <button disabled={busy} onClick={() => void action(() => startTask(task.taskId), t('tasks.started'))}>{t('tasks.start')}</button>}
                     {task.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelTask(task.taskId), t('tasks.cancelled'))}>{t('tasks.cancel')}</button>}
@@ -280,6 +291,16 @@ export default function App() {
           </table>
         </div>
       </section>
+      {comparisonTarget && baselineTask && <section className="panel" aria-labelledby="comparison-config-heading">
+        <h2 id="comparison-config-heading">{t('comparison.configure')}</h2>
+        <form onSubmit={compare} className="task-form">
+          <label>{t('comparison.baselineObservedAt')}<input name="baselineObservedAt" type="datetime-local" step="1" /></label>
+          <label>{t('comparison.targetObservedAt')}<input name="targetObservedAt" type="datetime-local" step="1" /></label>
+          <button type="submit" disabled={busy}>{t('tasks.compare')}</button>
+          <button type="button" disabled={busy} onClick={() => setComparisonTarget(null)}>{t('actions.close')}</button>
+        </form>
+        <p>{t('comparison.collectionTimePair')}</p>
+      </section>}
       <section className="panel comparison-list" aria-labelledby="comparisons-heading">
         <h2 id="comparisons-heading">{t('comparisons.title')}</h2>
         <div className="table-wrap"><table><thead><tr><th>{t('comparisons.name')}</th><th>{t('comparisons.status')}</th><th>{t('comparisons.progress')}</th><th>{t('comparisons.created')}</th><th></th></tr></thead><tbody>
@@ -300,6 +321,7 @@ function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void
   const [summary, setSummary] = useState<DiffSummary | null>(null);
   const [growth, setGrowth] = useState<DiffKeyResult | null>(null);
   const [shrink, setShrink] = useState<DiffKeyResult | null>(null);
+	const [churn, setChurn] = useState<DiffKeyResult | null>(null);
   const [prefixes, setPrefixes] = useState<DiffPrefix[]>([]);
   const [resources, setResources] = useState<DiffResource[]>([]);
   const [namespaces, setNamespaces] = useState<DiffNamespace[]>([]);
@@ -314,12 +336,12 @@ function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void
         if (!active) return;
         setComparison(nextComparison);
         if (nextComparison.status === 'completed') {
-          const [nextSummary, nextGrowth, nextShrink, nextPrefixes, nextResources, nextNamespaces] = await Promise.all([
-            getDiffOverview(diffId), listDiffKeys(diffId, 'desc'), listDiffKeys(diffId, 'asc'),
+		  const [nextSummary, nextGrowth, nextShrink, nextChurn, nextPrefixes, nextResources, nextNamespaces] = await Promise.all([
+			getDiffOverview(diffId), listDiffKeys(diffId, 'desc'), listDiffKeys(diffId, 'asc'), listDiffKeys(diffId, 'desc', 'revision_count'),
             listDiffPrefixes(diffId), listDiffResources(diffId), listDiffNamespaces(diffId),
           ]);
           if (!active) return;
-          setSummary(nextSummary); setGrowth(nextGrowth); setShrink(nextShrink);
+		  setSummary(nextSummary); setGrowth(nextGrowth); setShrink(nextShrink); setChurn(nextChurn);
           setPrefixes(nextPrefixes); setResources(nextResources); setNamespaces(nextNamespaces); setError('');
         } else if (nextComparison.status === 'pending' || nextComparison.status === 'running') {
           timer = window.setTimeout(() => void load(), 1000);
@@ -357,7 +379,7 @@ function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void
         <Metric metricKey="comparison.revisionRecords" value={formatSigned(summary.revisionCountDelta)} />
         <Metric metricKey="comparison.historicalVersions" value={formatSigned(summary.historicalVersionsDelta)} />
         <Metric metricKey="comparison.tombstoneCount" value={formatSigned(summary.tombstoneCountDelta)} />
-        <Metric metricKey="comparison.revisionRate" value={summary.revisionRateAvailable ? `${summary.averageRevisionsPerSecond?.toFixed(2)} /s` : t('value.unavailable')} />
+        <Metric metricKey="comparison.revisionRate" value={summary.revisionRateAvailable ? `${(summary.averageRevisionsPerSecond ?? 0) * 3600 >= 0 ? '+' : ''}${((summary.averageRevisionsPerSecond ?? 0) * 3600).toFixed(2)} /h` : t('value.unavailable')} />
       </div>}
 
       {summary.mvccAvailable && <>
@@ -365,6 +387,16 @@ function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void
           <DiffKeyTable title={t('comparison.topGrowth')} result={growth} />
           <DiffKeyTable title={t('comparison.topShrinking')} result={shrink} />
         </div>
+		<h3>{t('comparison.highChurnKeys')}</h3>
+		{summary.observationWindowSeconds > 0
+		  ? <p>{t('comparison.observationWindow', { hours: (summary.observationWindowSeconds / 3600).toFixed(2) })}</p>
+		  : <p className="notice">{t('comparison.rateUnavailable')}</p>}
+		<div className="table-wrap"><table><thead><tr><th>{t('comparison.key')}</th><th>{t('comparison.revisionDelta')}</th><th>{t('comparison.revisionsPerHour')}</th></tr></thead><tbody>
+		  {churn?.items.map((item) => {
+			const rate = summary.observationWindowSeconds > 0 ? item.revisionCountDelta / summary.observationWindowSeconds * 3600 : null;
+			return <tr key={item.keyHash}><td><code>{item.key}</code></td><td>{formatSigned(item.revisionCountDelta)}</td><td>{rate === null ? '—' : `${rate >= 0 ? '+' : ''}${rate.toFixed(2)}`}</td></tr>;
+		  })}
+		</tbody></table></div>
         <h3>{t('comparison.prefixGrowth')}</h3>
         <div className="table-wrap"><table><thead><tr><th>{t('comparison.prefix')}</th><th>{t('comparison.current')}</th><th>{t('comparison.history')}</th><th>{t('comparison.tombstone')}</th><th>{t('comparison.total')}</th></tr></thead><tbody>
           {prefixes.map((item) => <tr key={item.prefix}><td><code>{item.prefix}</code></td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td><td>{formatSignedBytes(item.tombstoneBytesDelta)}</td><td>{formatSignedBytes(item.totalBytesDelta)}</td></tr>)}
@@ -452,6 +484,7 @@ function SemanticAnalysis({ taskId }: { taskId: string }) {
   const [summary, setSummary] = useState<MVCCSummary | null>(null);
   const [prefixes, setPrefixes] = useState<PrefixStat[]>([]);
   const [keys, setKeys] = useState<KeyResult | null>(null);
+	const [churnKeys, setChurnKeys] = useState<KeyResult | null>(null);
   const [filters, setFilters] = useState<KeyFilters>(initialKeyFilters);
   const [page, setPage] = useState(1);
   const [selectedKey, setSelectedKey] = useState<KeyRecord | null>(null);
@@ -460,10 +493,10 @@ function SemanticAnalysis({ taskId }: { taskId: string }) {
 
   useEffect(() => {
     let active = true;
-    Promise.all([getMVCCSummary(taskId), listPrefixes(taskId), listKeys(taskId, page, filters)])
-      .then(([nextSummary, nextPrefixes, nextKeys]) => {
+	Promise.all([getMVCCSummary(taskId), listPrefixes(taskId), listKeys(taskId, page, filters), listKeys(taskId, 1, { ...initialKeyFilters, sort: 'revision_count' })])
+	  .then(([nextSummary, nextPrefixes, nextKeys, nextChurnKeys]) => {
         if (!active) return;
-        setSummary(nextSummary); setPrefixes(nextPrefixes); setKeys(nextKeys); setError('');
+		setSummary(nextSummary); setPrefixes(nextPrefixes); setKeys(nextKeys); setChurnKeys(nextChurnKeys); setError('');
       })
       .catch((reason: unknown) => {
         if (active) setError(reason instanceof Error ? reason.message : t('semantic.loadFailed'));
@@ -493,6 +526,11 @@ function SemanticAnalysis({ taskId }: { taskId: string }) {
         <Metric metricKey="mvcc.historicalBytes" value={formatBytes(summary.historicalBytes)} />
         <Metric metricKey="mvcc.tombstones" value={String(summary.tombstoneCount)} />
       </div>
+	  <h3>{t('semantic.highChurnKeys')}</h3>
+	  <p>{t('semantic.retainedCaveat')}</p>
+	  <div className="table-wrap"><table><thead><tr><th>{t('comparison.key')}</th><th>{t('semantic.retainedRevisions')}</th><th>{t('semantic.history')}</th><th>{t('semantic.tombstones')}</th></tr></thead>
+		<tbody>{churnKeys?.items.map((key) => <tr key={key.id}><td><code>{key.keyText}</code></td><td>{key.revisionCount}</td><td>{formatBytes(key.historicalBytes)}</td><td>{key.tombstoneCount}</td></tr>)}</tbody>
+	  </table></div>
 
       <h3>{t('semantic.topPrefixes')}</h3>
       <div className="table-wrap"><table><thead><tr><th>{t('semantic.prefix')}</th><th>{t('semantic.currentKeys')}</th><th>{t('semantic.history')}</th><th>{t('semantic.tombstones')}</th></tr></thead>

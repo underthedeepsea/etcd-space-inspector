@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/storage"
@@ -23,10 +24,13 @@ func TestDiffRoutesAndQueries(t *testing.T) {
 	}
 	handler := New(Dependencies{Diffs: service})
 
-	body := bytes.NewBufferString(`{"name":"growth","baselineTaskId":"base","targetTaskId":"target"}`)
+	body := bytes.NewBufferString(`{"name":"growth","baselineTaskId":"base","targetTaskId":"target","baselineObservedAt":"2026-07-31T10:00:00Z","targetObservedAt":"2026-07-31T12:00:00Z"}`)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/diffs", body))
-	if recorder.Code != http.StatusCreated || service.created.BaselineTaskID != "base" {
+	if recorder.Code != http.StatusCreated || service.created.BaselineTaskID != "base" ||
+		service.created.BaselineObservedAt == nil || service.created.TargetObservedAt == nil ||
+		!service.created.BaselineObservedAt.Equal(time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)) ||
+		!service.created.TargetObservedAt.Equal(time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("status=%d body=%s created=%+v", recorder.Code, recorder.Body.String(), service.created)
 	}
 
@@ -73,6 +77,9 @@ func TestDiffRoutesRejectInvalidInput(t *testing.T) {
 		body   string
 	}{
 		{method: http.MethodPost, path: "/api/v1/diffs", body: `{"name":"x","baselineTaskId":"a","targetTaskId":"b","extra":true}`},
+		{method: http.MethodPost, path: "/api/v1/diffs", body: `{"name":"x","baselineTaskId":"a","targetTaskId":"b","baselineObservedAt":"2026-07-31T10:00:00Z"}`},
+		{method: http.MethodPost, path: "/api/v1/diffs", body: `{"name":"x","baselineTaskId":"a","targetTaskId":"b","baselineObservedAt":"not-a-time","targetObservedAt":"2026-07-31T12:00:00Z"}`},
+		{method: http.MethodPost, path: "/api/v1/diffs", body: `{"name":"x","baselineTaskId":"a","targetTaskId":"b","baselineObservedAt":"2026-07-31T12:00:00Z","targetObservedAt":"2026-07-31T12:00:00Z"}`},
 		{method: http.MethodGet, path: "/api/v1/diffs/d1/keys?changeType=unknown"},
 		{method: http.MethodGet, path: "/api/v1/diffs/d1/keys?sort=raw_sql"},
 		{method: http.MethodGet, path: "/api/v1/diffs/d1/keys?order=random"},

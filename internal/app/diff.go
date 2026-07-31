@@ -143,8 +143,12 @@ func (a *Application) runDiff(ctx context.Context, item domain.Comparison) {
 		return
 	}
 	defer diffDB.Close()
+	observationWindow := time.Duration(0)
+	if item.BaselineObservedAt != nil && item.TargetObservedAt != nil {
+		observationWindow = item.TargetObservedAt.Sub(*item.BaselineObservedAt)
+	}
 	if err := domain.NewCalculator(a.diffBatchSize).Compare(
-		ctx, baselineDB, targetDB, baselineTask, targetTask, storage.NewDiffRepository(diffDB)); err != nil {
+		ctx, baselineDB, targetDB, baselineTask, targetTask, observationWindow, storage.NewDiffRepository(diffDB)); err != nil {
 		a.failDiff(item, err)
 		return
 	}

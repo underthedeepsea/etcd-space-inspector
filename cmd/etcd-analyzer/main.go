@@ -60,6 +60,8 @@ func runDiff(args []string, stdout, stderr io.Writer) int {
 	targetID := flags.String("target", "", "target task ID")
 	dataDir := flags.String("data-dir", "./analysis-data", "analysis data directory")
 	name := flags.String("name", "", "comparison name")
+	baselineObservedAtText := flags.String("baseline-observed-at", "", "baseline Snapshot collection time (RFC 3339)")
+	targetObservedAtText := flags.String("target-observed-at", "", "target Snapshot collection time (RFC 3339)")
 	if err := flags.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
@@ -73,6 +75,11 @@ func runDiff(args []string, stdout, stderr io.Writer) int {
 	if *name == "" {
 		*name = *baselineID + "-to-" + *targetID
 	}
+	baselineObservedAt, targetObservedAt, err := parseObservationWindow(*baselineObservedAtText, *targetObservedAtText)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid observation times: %v\n", err)
+		return 2
+	}
 	settings, err := config.Load("")
 	if err != nil {
 		fmt.Fprintf(stderr, "load defaults: %v\n", err)
@@ -84,6 +91,7 @@ func runDiff(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	created, err := application.CreateDiff(ctx, domain.CreateRequest{
 		Name: *name, BaselineTaskID: *baselineID, TargetTaskID: *targetID,
+		BaselineObservedAt: baselineObservedAt, TargetObservedAt: targetObservedAt,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "create comparison: %v\n", err)
@@ -113,6 +121,27 @@ func runDiff(args []string, stdout, stderr io.Writer) int {
 		case <-ticker.C:
 		}
 	}
+}
+
+func parseObservationWindow(baseline, target string) (*time.Time, *time.Time, error) {
+	if baseline == "" && target == "" {
+		return nil, nil, nil
+	}
+	if baseline == "" || target == "" {
+		return nil, nil, fmt.Errorf("both observation times are required")
+	}
+	baselineTime, err := time.Parse(time.RFC3339, baseline)
+	if err != nil {
+		return nil, nil, err
+	}
+	targetTime, err := time.Parse(time.RFC3339, target)
+	if err != nil {
+		return nil, nil, err
+	}
+	if targetTime.Sub(baselineTime) < time.Second {
+		return nil, nil, fmt.Errorf("observation window must be at least one second")
+	}
+	return &baselineTime, &targetTime, nil
 }
 
 func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int {

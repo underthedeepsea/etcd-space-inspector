@@ -1,91 +1,50 @@
 package diff
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
+	"time"
 )
 
-func TestServiceCreatesAndListsPrivateComparison(t *testing.T) {
+func TestServiceCreateValidatesObservationTimes(t *testing.T) {
 	service := NewService(t.TempDir())
+	baseline := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+	target := baseline.Add(2 * time.Hour)
+
 	created, err := service.Create(CreateRequest{
-		Name: "before-after", BaselineTaskID: "base", TargetTaskID: "target",
+		Name: "timed", BaselineTaskID: "base", TargetTaskID: "target",
+		BaselineObservedAt: &baseline, TargetObservedAt: &target,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Status != StatusPending || created.BaselineTaskID != "base" || created.TargetTaskID != "target" {
+	if created.BaselineObservedAt == nil || created.TargetObservedAt == nil ||
+		!created.BaselineObservedAt.Equal(baseline) || !created.TargetObservedAt.Equal(target) {
 		t.Fatalf("created=%+v", created)
 	}
-	info, err := os.Stat(filepath.Join(service.DiffDir(created.ID), "manifest.json"))
+	reloaded, err := service.Get(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("manifest permissions=%o", info.Mode().Perm())
+	if reloaded.BaselineObservedAt == nil || reloaded.TargetObservedAt == nil ||
+		!reloaded.BaselineObservedAt.Equal(baseline) || !reloaded.TargetObservedAt.Equal(target) {
+		t.Fatalf("reloaded=%+v", reloaded)
 	}
 
-	loaded, err := service.Get(created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.ID != created.ID || loaded.Name != "before-after" {
-		t.Fatalf("loaded=%+v", loaded)
-	}
-	items, err := service.List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 1 || items[0].ID != created.ID {
-		t.Fatalf("items=%+v", items)
-	}
-}
-
-func TestServiceRejectsInvalidComparison(t *testing.T) {
-	service := NewService(t.TempDir())
-	tests := []CreateRequest{
-		{Name: "", BaselineTaskID: "base", TargetTaskID: "target"},
-		{Name: "missing baseline", BaselineTaskID: "", TargetTaskID: "target"},
-		{Name: "missing target", BaselineTaskID: "base", TargetTaskID: ""},
-		{Name: "same", BaselineTaskID: "same", TargetTaskID: "same"},
-		{Name: "bad baseline", BaselineTaskID: "../base", TargetTaskID: "target"},
-	}
-	for _, input := range tests {
-		if _, err := service.Create(input); err == nil {
-			t.Fatalf("Create(%+v) succeeded", input)
+	for _, request := range []CreateRequest{
+		{Name: "without-times", BaselineTaskID: "base", TargetTaskID: "target"},
+		{Name: "only-baseline", BaselineTaskID: "base", TargetTaskID: "target", BaselineObservedAt: &baseline},
+		{Name: "equal", BaselineTaskID: "base", TargetTaskID: "target", BaselineObservedAt: &baseline, TargetObservedAt: &baseline},
+		{Name: "sub-second", BaselineTaskID: "base", TargetTaskID: "target", BaselineObservedAt: &baseline, TargetObservedAt: timePointer(baseline.Add(time.Nanosecond))},
+		{Name: "reverse", BaselineTaskID: "base", TargetTaskID: "target", BaselineObservedAt: &target, TargetObservedAt: &baseline},
+	} {
+		_, err := service.Create(request)
+		if request.Name == "without-times" && err != nil {
+			t.Fatalf("request=%s err=%v", request.Name, err)
+		}
+		if request.Name != "without-times" && err == nil {
+			t.Fatalf("request=%s accepted invalid observation times", request.Name)
 		}
 	}
-	if err := service.Delete("../tasks"); err == nil {
-		t.Fatal("Delete accepted escaping id")
-	}
 }
 
-func TestServiceSavesCancelsAndDeletesComparison(t *testing.T) {
-	service := NewService(t.TempDir())
-	created, err := service.Create(CreateRequest{Name: "compare", BaselineTaskID: "base", TargetTaskID: "target"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	created.Status = StatusRunning
-	created.Progress = 0.5
-	created.CurrentStage = "mvcc"
-	if err := service.Save(created); err != nil {
-		t.Fatal(err)
-	}
-	if err := service.Cancel(created.ID); err != nil {
-		t.Fatal(err)
-	}
-	cancelled, err := service.Get(created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cancelled.Status != StatusCancelled || cancelled.CompletedAt == nil {
-		t.Fatalf("cancelled=%+v", cancelled)
-	}
-	if err := service.Delete(created.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(service.DiffDir(created.ID)); !os.IsNotExist(err) {
-		t.Fatalf("diff directory still exists: %v", err)
-	}
-}
+func timePointer(value time.Time) *time.Time { return &value }

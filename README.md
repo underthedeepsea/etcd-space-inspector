@@ -1,6 +1,6 @@
 # etcd Space Inspector
 
-etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。当前版本为 M5 `0.5.0`：支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析，以及两个已完成 Snapshot 任务之间的持久化空间差分。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
+etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。它支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析、Key 保留 revision 活跃度，以及两个已完成 Snapshot 任务之间的持久化空间差分。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
 
 发布版本、对应标签和分支规则见 [RELEASE.md](RELEASE.md)。
 
@@ -68,9 +68,13 @@ bin/etcd-analyzer analyze \
   --output ./analysis-data
 
 # 比较两个已完成的分析任务
+# 采集时间必须是实际 Snapshot 采集时间，两个参数要同时提供或同时省略。
+# 提供后，结果会显示净保留 revision 的每小时变化速率。
 bin/etcd-analyzer diff \
   --base <baseline-task-id> \
   --target <target-task-id> \
+  --baseline-observed-at 2026-07-31T10:00:00Z \
+  --target-observed-at 2026-07-31T12:00:00Z \
   --data-dir ./analysis-data
 
 # 启动本地 Web UI
@@ -114,6 +118,16 @@ bin/etcd-analyzer server \
 `analyze` 子命令目前只支持 `--max-input-bytes`，其余分析参数由 `server --config` 使用。大 Snapshot 建议将数据目录置于本地 SSD、预留源文件与任务结果所需空间，并一次只运行一个导入任务，避免多个任务同时争用磁盘。
 
 Web UI 顶部可切换中文与 English；选择仅保存在当前浏览器本地。每张分析指标卡片旁的 `?` 可在鼠标悬停或键盘聚焦时显示该指标的定义。
+
+## Key 活跃度与双 Snapshot 速率
+
+当 MVCC 语义解码可用时，任务分析页会列出保留 revision 数最多的 Key，并同时显示其历史字节数和 tombstone 数。这有助于发现持续占用 MVCC 历史空间的热点 Key。
+
+这里的“活跃度”是 **Snapshot 中仍保留的 revision 数**，不是精确的写入次数：etcd compaction 可能已移除较早的历史，因此不能从单个 Snapshot 恢复完整写入频率。
+
+在 Web UI 选择两个任务开始比较时，可以填写两个 Snapshot 的实际采集时间；两个值必须同时填写，且目标时间至少晚一秒。比较结果会显示 Key 的净保留 revision 增量，并按这个时间窗口换算“净保留 revisions/小时”。未填写时间时仍可查看增量，但页面会明确不显示速率。系统绝不使用任务导入时间代替 Snapshot 采集时间。
+
+API 的 `POST /api/v1/diffs` 支持可选的 RFC 3339 字段 `baselineObservedAt` 和 `targetObservedAt`；它们同样必须成对提供。差分概览中的 `observationWindowSeconds` 表示该时间窗口。
 
 ## 数据目录
 
@@ -197,7 +211,7 @@ CRD JSON 使用结构化字段分析。每个 registry revision 会记录 `decod
 
 原始 Value 只在有界内存流水线中参与解码、长度与 SHA-256 计算，不写入 SQLite、日志、API 或 HTML。字段分析只持久化路径、字节数、类型和 SHA-256；Secret、ServiceAccount 等敏感资源在 Kubernetes 视图中使用 `redacted:<key-hash>` 名称。
 
-本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，也不采集日志、审计或 Prometheus 数据。`0.5.0` 可以比较两个已完成任务：物理结果在两侧都有 bbolt 分析数据时生成；MVCC 和 Kubernetes 差分只有在两侧语义结果可用且 etcd 主次版本兼容时生成，否则明确降级且不猜测。差分数据库只保存大小、计数、Key 标识和聚合增量，不保存原始 Value。
+本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，也不采集日志、审计或 Prometheus 数据。它可以比较两个已完成任务：物理结果在两侧都有 bbolt 分析数据时生成；MVCC 和 Kubernetes 差分只有在两侧语义结果可用且 etcd 主次版本兼容时生成，否则明确降级且不猜测。差分数据库只保存大小、计数、Key 标识和聚合增量，不保存原始 Value。
 
 双 Snapshot 差分可以定位增长来自当前有效数据、历史 revision、tombstone、空闲页、Key、Prefix、Resource 或 Namespace，但单凭 Snapshot 仍不能确定具体 Controller、客户端或用户身份；这需要后续日志和 Audit Log 关联能力。
 
@@ -206,7 +220,7 @@ CRD JSON 使用结构化字段分析。每个 registry revision 会记录 `decod
 ```bash
 make check
 make build
-bin/etcd-analyzer version   # 0.5.0
+bin/etcd-analyzer version   # 显示当前检出版本的三段式版本号
 
 # 可选的百万 revision 长测，不在默认测试门禁中运行
 ETCD_ANALYZER_LONG_TESTS=1 go test ./internal/integration -run TestMillionRevisions -v

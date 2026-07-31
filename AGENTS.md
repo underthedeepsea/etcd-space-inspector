@@ -7,6 +7,12 @@
 - Create the matching annotated tag `vX.Y.Z` only when that version is complete and verified.
 - Base the next version branch on the latest completed release branch, unless an explicit integration branch is required.
 
+## GitHub release workflow
+
+- When the user asks to push a completed and verified `release/X.Y.Z` branch to GitHub, complete the whole release flow without waiting for separate prompts: update the release record, push the branch, create and merge a PR into `main`, update local `main`, create the annotated tag `vX.Y.Z` on the merged commit, and push `main` and the tag.
+- Do not create the version tag before the PR has merged into `main`.
+- Keep the release worktree and version branch unless the user explicitly asks to remove them.
+
 ## Repository hygiene
 
 - Do not add `etcd-dbsize-analyzer-codex-development-guide.md` to Git.

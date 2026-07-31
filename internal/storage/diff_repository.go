@@ -40,6 +40,11 @@ func OpenDiff(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialize diff schema: %w", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE diff_summary ADD COLUMN observation_window_seconds INTEGER NOT NULL DEFAULT 0`); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		db.Close()
+		return nil, fmt.Errorf("upgrade diff schema: %w", err)
+	}
 	return db, nil
 }
 
@@ -100,7 +105,7 @@ type DiffDeltaQuery struct {
 func (r *DiffRepository) SaveSummary(ctx context.Context, item domain.Summary) error {
 	_, err := r.db.ExecContext(ctx, `
 INSERT INTO diff_summary VALUES (
-  1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT(singleton) DO UPDATE SET
   baseline_task_id=excluded.baseline_task_id, target_task_id=excluded.target_task_id,
@@ -121,7 +126,8 @@ ON CONFLICT(singleton) DO UPDATE SET
   kubernetes_current_bytes_delta=excluded.kubernetes_current_bytes_delta,
   kubernetes_historical_bytes_delta=excluded.kubernetes_historical_bytes_delta,
   revision_rate_available=excluded.revision_rate_available,
-  average_revisions_per_second=excluded.average_revisions_per_second`,
+  average_revisions_per_second=excluded.average_revisions_per_second,
+  observation_window_seconds=excluded.observation_window_seconds`,
 		item.BaselineTaskID, item.TargetTaskID,
 		item.PhysicalAvailable, item.PhysicalUnavailableReason,
 		item.MVCCAvailable, item.MVCCUnavailableReason,
@@ -134,7 +140,7 @@ ON CONFLICT(singleton) DO UPDATE SET
 		item.HistoricalVersionsDelta, item.HistoricalBytesDelta,
 		item.TombstoneCountDelta, item.TombstoneBytesDelta,
 		item.CurrentObjectsDelta, item.KubernetesCurrentBytesDelta, item.KubernetesHistoricalDelta,
-		item.RevisionRateAvailable, item.AverageRevisionsPerSecond)
+		item.RevisionRateAvailable, item.AverageRevisionsPerSecond, item.ObservationWindowSeconds)
 	if err != nil {
 		return fmt.Errorf("save diff summary: %w", err)
 	}
@@ -144,7 +150,30 @@ ON CONFLICT(singleton) DO UPDATE SET
 // Summary returns the singleton comparison summary.
 func (r *DiffRepository) Summary(ctx context.Context) (domain.Summary, error) {
 	var item domain.Summary
-	err := r.db.QueryRowContext(ctx, `
+	err := r.db.QueryRowContext(ctx, diffSummarySelect).Scan(diffSummaryDestinations(&item, true)...)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "no such column: observation_window_seconds") {
+		err = r.db.QueryRowContext(ctx, legacyDiffSummarySelect).Scan(diffSummaryDestinations(&item, false)...)
+	}
+	if err != nil {
+		return domain.Summary{}, fmt.Errorf("select diff summary: %w", err)
+	}
+	return item, nil
+}
+
+const diffSummarySelect = `
+SELECT baseline_task_id, target_task_id,
+  physical_available, physical_unavailable_reason, mvcc_available, mvcc_unavailable_reason,
+  kubernetes_available, kubernetes_unavailable_reason,
+  physical_file_size_delta, page_size_delta, page_count_delta, in_use_page_bytes_delta,
+  free_page_bytes_delta, fragmentation_ratio_delta, meta_pages_delta, branch_pages_delta,
+  leaf_pages_delta, freelist_pages_delta, overflow_pages_delta, free_pages_delta, unknown_pages_delta,
+  revision_count_delta, current_key_count_delta, current_stored_bytes_delta,
+  historical_versions_delta, historical_bytes_delta, tombstone_count_delta, tombstone_bytes_delta,
+  current_objects_delta, kubernetes_current_bytes_delta, kubernetes_historical_bytes_delta,
+  revision_rate_available, average_revisions_per_second, observation_window_seconds
+FROM diff_summary WHERE singleton = 1`
+
+const legacyDiffSummarySelect = `
 SELECT baseline_task_id, target_task_id,
   physical_available, physical_unavailable_reason, mvcc_available, mvcc_unavailable_reason,
   kubernetes_available, kubernetes_unavailable_reason,
@@ -155,7 +184,10 @@ SELECT baseline_task_id, target_task_id,
   historical_versions_delta, historical_bytes_delta, tombstone_count_delta, tombstone_bytes_delta,
   current_objects_delta, kubernetes_current_bytes_delta, kubernetes_historical_bytes_delta,
   revision_rate_available, average_revisions_per_second
-FROM diff_summary WHERE singleton = 1`).Scan(
+FROM diff_summary WHERE singleton = 1`
+
+func diffSummaryDestinations(item *domain.Summary, includeObservationWindow bool) []any {
+	result := []any{
 		&item.BaselineTaskID, &item.TargetTaskID,
 		&item.PhysicalAvailable, &item.PhysicalUnavailableReason,
 		&item.MVCCAvailable, &item.MVCCUnavailableReason,
@@ -168,11 +200,12 @@ FROM diff_summary WHERE singleton = 1`).Scan(
 		&item.HistoricalVersionsDelta, &item.HistoricalBytesDelta,
 		&item.TombstoneCountDelta, &item.TombstoneBytesDelta,
 		&item.CurrentObjectsDelta, &item.KubernetesCurrentBytesDelta, &item.KubernetesHistoricalDelta,
-		&item.RevisionRateAvailable, &item.AverageRevisionsPerSecond)
-	if err != nil {
-		return domain.Summary{}, fmt.Errorf("select diff summary: %w", err)
+		&item.RevisionRateAvailable, &item.AverageRevisionsPerSecond,
 	}
-	return item, nil
+	if includeObservationWindow {
+		result = append(result, &item.ObservationWindowSeconds)
+	}
+	return result
 }
 
 // ReplaceKeys atomically replaces aligned Key deltas.

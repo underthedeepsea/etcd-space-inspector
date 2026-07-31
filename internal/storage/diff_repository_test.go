@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -31,6 +32,95 @@ func TestDiffRepositoryPersistsSummary(t *testing.T) {
 		t.Fatalf("got=%+v", got)
 	}
 }
+
+func TestDiffRepositoryPersistsObservationWindow(t *testing.T) {
+	db, err := OpenDiff(filepath.Join(t.TempDir(), "diff.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repository := NewDiffRepository(db)
+	if err := repository.SaveSummary(context.Background(), domain.Summary{
+		BaselineTaskID: "base", TargetTaskID: "target", ObservationWindowSeconds: 7200,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repository.Summary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ObservationWindowSeconds != 7200 {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestDiffRepositoryReadsLegacySummaryWithoutObservationWindow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(legacyDiffSummarySchema); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO diff_summary (singleton, baseline_task_id, target_task_id) VALUES (1, 'base', 'target')`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readOnly, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	got, err := NewDiffRepository(readOnly).Summary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BaselineTaskID != "base" || got.TargetTaskID != "target" || got.ObservationWindowSeconds != 0 {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+const legacyDiffSummarySchema = `CREATE TABLE diff_summary (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  baseline_task_id TEXT NOT NULL DEFAULT '',
+  target_task_id TEXT NOT NULL DEFAULT '',
+  physical_available INTEGER NOT NULL DEFAULT 0,
+  physical_unavailable_reason TEXT NOT NULL DEFAULT '',
+  mvcc_available INTEGER NOT NULL DEFAULT 0,
+  mvcc_unavailable_reason TEXT NOT NULL DEFAULT '',
+  kubernetes_available INTEGER NOT NULL DEFAULT 0,
+  kubernetes_unavailable_reason TEXT NOT NULL DEFAULT '',
+  physical_file_size_delta INTEGER NOT NULL DEFAULT 0,
+  page_size_delta INTEGER NOT NULL DEFAULT 0,
+  page_count_delta INTEGER NOT NULL DEFAULT 0,
+  in_use_page_bytes_delta INTEGER NOT NULL DEFAULT 0,
+  free_page_bytes_delta INTEGER NOT NULL DEFAULT 0,
+  fragmentation_ratio_delta REAL NOT NULL DEFAULT 0,
+  meta_pages_delta INTEGER NOT NULL DEFAULT 0,
+  branch_pages_delta INTEGER NOT NULL DEFAULT 0,
+  leaf_pages_delta INTEGER NOT NULL DEFAULT 0,
+  freelist_pages_delta INTEGER NOT NULL DEFAULT 0,
+  overflow_pages_delta INTEGER NOT NULL DEFAULT 0,
+  free_pages_delta INTEGER NOT NULL DEFAULT 0,
+  unknown_pages_delta INTEGER NOT NULL DEFAULT 0,
+  revision_count_delta INTEGER NOT NULL DEFAULT 0,
+  current_key_count_delta INTEGER NOT NULL DEFAULT 0,
+  current_stored_bytes_delta INTEGER NOT NULL DEFAULT 0,
+  historical_versions_delta INTEGER NOT NULL DEFAULT 0,
+  historical_bytes_delta INTEGER NOT NULL DEFAULT 0,
+  tombstone_count_delta INTEGER NOT NULL DEFAULT 0,
+  tombstone_bytes_delta INTEGER NOT NULL DEFAULT 0,
+  current_objects_delta INTEGER NOT NULL DEFAULT 0,
+  kubernetes_current_bytes_delta INTEGER NOT NULL DEFAULT 0,
+  kubernetes_historical_bytes_delta INTEGER NOT NULL DEFAULT 0,
+  revision_rate_available INTEGER NOT NULL DEFAULT 0,
+  average_revisions_per_second REAL NOT NULL DEFAULT 0
+)`
 
 func TestDiffRepositoryPersistsSignedKeyDeltas(t *testing.T) {
 	db, err := OpenDiff(filepath.Join(t.TempDir(), "diff.db"))

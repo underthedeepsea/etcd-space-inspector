@@ -257,6 +257,8 @@ export interface Comparison {
   name: string;
   baselineTaskId: string;
   targetTaskId: string;
+	baselineObservedAt?: string;
+	targetObservedAt?: string;
   status: TaskStatus;
   progress: number;
   currentStage?: string;
@@ -269,6 +271,8 @@ export interface CreateComparison {
   name: string;
   baselineTaskId: string;
   targetTaskId: string;
+	baselineObservedAt?: string;
+	targetObservedAt?: string;
 }
 
 export interface DiffSummary {
@@ -294,6 +298,7 @@ export interface DiffSummary {
   currentObjectsDelta: number;
   kubernetesCurrentBytesDelta: number;
   kubernetesHistoricalBytesDelta: number;
+	observationWindowSeconds: number;
   revisionRateAvailable: boolean;
   averageRevisionsPerSecond?: number;
 }
@@ -477,8 +482,8 @@ export function getDiffOverview(id: string): Promise<DiffSummary> {
   return request(`/api/v1/diffs/${encodeURIComponent(id)}/overview`);
 }
 
-export function listDiffKeys(id: string, order: 'asc' | 'desc'): Promise<DiffKeyResult> {
-  return request(`/api/v1/diffs/${encodeURIComponent(id)}/keys?pageSize=20&sort=total_bytes&order=${order}`);
+export function listDiffKeys(id: string, order: 'asc' | 'desc', sort: 'total_bytes' | 'revision_count' = 'total_bytes'): Promise<DiffKeyResult> {
+  return request(`/api/v1/diffs/${encodeURIComponent(id)}/keys?pageSize=20&sort=${sort}&order=${order}`);
 }
 
 export async function listDiffPrefixes(id: string): Promise<DiffPrefix[]> {
