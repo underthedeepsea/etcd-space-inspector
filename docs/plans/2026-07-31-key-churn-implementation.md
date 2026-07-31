@@ -14,7 +14,7 @@
 - Retained revision count is Snapshot evidence, not an exact write count; compaction can remove older revisions.
 - Rates require two operator-provided RFC 3339 collection times. Never derive them from import time.
 - Do not persist raw Values, logs, Audit data, or actor identities.
-- Preserve task and comparison manifests without collection timestamps; report rate as unavailable.
+- Preserve task and comparison manifests without collection timestamps; report rate as unavailable. Older diff databases can be opened read-only, so summary reads must fall back safely when their interval column is absent.
 - Do not add excluded internal-document paths to Git. New visible copy is Chinese and English.
 
 ---
@@ -71,7 +71,7 @@ Expected: compile failure because the interval field and calculator argument do 
 
 - [ ] **Step 7: Implement the compatible schema change**
 
-Add `ObservationWindowSeconds` to `diff.Summary`. Change `Calculator.Compare` to accept `time.Duration`; set whole positive seconds and calculate the existing global net retained-revision rate only for a positive interval. In `OpenDiff`, execute the existing schema then `ALTER TABLE diff_summary ADD COLUMN observation_window_seconds INTEGER NOT NULL DEFAULT 0`; ignore only SQLite's duplicate-column error. Extend summary insert, update, and select statements. In `Application.runDiff`, derive the duration from the two manifest timestamps or use zero.
+Add `ObservationWindowSeconds` to `diff.Summary`. Change `Calculator.Compare` to accept `time.Duration`; set whole positive seconds and calculate the existing global net retained-revision rate only for a positive interval. In `OpenDiff`, execute the existing schema then `ALTER TABLE diff_summary ADD COLUMN observation_window_seconds INTEGER NOT NULL DEFAULT 0`; ignore only SQLite's duplicate-column error. Extend summary insert, update, and select statements. When `DiffRepository.Summary` receives SQLite's missing-column error through a read-only old comparison database, repeat the prior select without the interval column and return zero. In `Application.runDiff`, derive the duration from the two manifest timestamps or use zero.
 
 - [ ] **Step 8: Verify GREEN and commit**
 
@@ -217,4 +217,3 @@ Verify the two leaderboards, rate-available and rate-unavailable states, and bot
 ## Self-review
 
 Tasks 1–3 cover the two requested behaviors, correct time provenance, backward compatibility, API/CLI input, and localized UI. Task 4 covers user documentation and full verification. Field names and JSON contracts are consistent throughout; no placeholder steps remain.
-

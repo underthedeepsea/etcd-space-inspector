@@ -40,6 +40,8 @@ The comparison calculator derives an interval in seconds from those manifest val
 
 Existing task and comparison manifests without observation times remain valid. Their rate fields are explicitly unavailable rather than inferred from import timestamps.
 
+Older comparison databases are opened read-only for viewing. If an older database lacks the new interval column, its summary reader must fall back to the prior column set and return an interval of zero; viewing an old comparison must not require a write migration.
+
 ## User interface
 
 The MVCC analysis panel gains a compact **High-churn Keys** table above the full Key table. The copy says that it is ranked by retained revisions, with a short notice that compaction may have removed older history.
