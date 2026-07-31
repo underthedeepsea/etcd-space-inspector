@@ -37,6 +37,12 @@ func (s *Service) Create(request CreateRequest) (Comparison, error) {
 	if request.BaselineTaskID == request.TargetTaskID {
 		return Comparison{}, fmt.Errorf("baseline and target tasks must differ")
 	}
+	if (request.BaselineObservedAt == nil) != (request.TargetObservedAt == nil) {
+		return Comparison{}, fmt.Errorf("both observation times are required")
+	}
+	if request.BaselineObservedAt != nil && request.TargetObservedAt.Sub(*request.BaselineObservedAt) < time.Second {
+		return Comparison{}, fmt.Errorf("observation window must be at least one second")
+	}
 	id, err := newID()
 	if err != nil {
 		return Comparison{}, fmt.Errorf("create diff id: %w", err)
@@ -52,8 +58,9 @@ func (s *Service) Create(request CreateRequest) (Comparison, error) {
 	}()
 	item := Comparison{
 		ID: id, Name: request.Name, BaselineTaskID: request.BaselineTaskID,
-		TargetTaskID: request.TargetTaskID, Status: StatusPending,
-		CreatedAt: time.Now().UTC(), SchemaVersion: 1,
+		TargetTaskID: request.TargetTaskID, BaselineObservedAt: request.BaselineObservedAt,
+		TargetObservedAt: request.TargetObservedAt, Status: StatusPending,
+		CreatedAt: time.Now().UTC(), SchemaVersion: 2,
 	}
 	if err := s.writeManifest(item); err != nil {
 		return Comparison{}, err

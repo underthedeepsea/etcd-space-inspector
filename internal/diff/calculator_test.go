@@ -55,13 +55,14 @@ func TestCalculatorAlignsPhysicalSemanticAndKubernetesDeltas(t *testing.T) {
 	})
 	sink := &recordingSink{}
 	baseTask, targetTask := completedTasks()
-	if err := domain.NewCalculator(2).Compare(context.Background(), baseline, target, baseTask, targetTask, sink); err != nil {
+	if err := domain.NewCalculator(2).Compare(context.Background(), baseline, target, baseTask, targetTask, 10*time.Second, sink); err != nil {
 		t.Fatal(err)
 	}
 	if !sink.summary.PhysicalAvailable || sink.summary.PhysicalFileSizeDelta != 600 || sink.summary.FreePageBytesDelta != -20 {
 		t.Fatalf("physical summary=%+v", sink.summary)
 	}
-	if !sink.summary.MVCCAvailable || sink.summary.RevisionCountDelta != 5 || !sink.summary.RevisionRateAvailable || sink.summary.AverageRevisionsPerSecond != 0.5 {
+	if !sink.summary.MVCCAvailable || sink.summary.RevisionCountDelta != 5 || sink.summary.ObservationWindowSeconds != 10 ||
+		!sink.summary.RevisionRateAvailable || sink.summary.AverageRevisionsPerSecond != 0.5 {
 		t.Fatalf("MVCC summary=%+v", sink.summary)
 	}
 	assertKeyDelta(t, sink.keys, "a", domain.ChangeModified, 60)
@@ -78,12 +79,25 @@ func TestCalculatorAlignsPhysicalSemanticAndKubernetesDeltas(t *testing.T) {
 	}
 }
 
+func TestCalculatorLeavesRateUnavailableWithoutObservationWindow(t *testing.T) {
+	baseline := comparisonTaskDB(t, taskFixture{physicalBytes: 1000, revisionCount: 3})
+	target := comparisonTaskDB(t, taskFixture{physicalBytes: 1200, revisionCount: 8})
+	sink := &recordingSink{}
+	baseTask, targetTask := completedTasks()
+	if err := domain.NewCalculator(100).Compare(context.Background(), baseline, target, baseTask, targetTask, 0, sink); err != nil {
+		t.Fatal(err)
+	}
+	if sink.summary.ObservationWindowSeconds != 0 || sink.summary.RevisionRateAvailable || sink.summary.AverageRevisionsPerSecond != 0 {
+		t.Fatalf("summary=%+v", sink.summary)
+	}
+}
+
 func TestCalculatorKeepsPhysicalDiffWhenSemanticsUnavailable(t *testing.T) {
 	baseline := comparisonTaskDB(t, taskFixture{physicalBytes: 1000, semanticAvailable: boolPointer(false)})
 	target := comparisonTaskDB(t, taskFixture{physicalBytes: 1200})
 	sink := &recordingSink{}
 	baseTask, targetTask := completedTasks()
-	if err := domain.NewCalculator(100).Compare(context.Background(), baseline, target, baseTask, targetTask, sink); err != nil {
+	if err := domain.NewCalculator(100).Compare(context.Background(), baseline, target, baseTask, targetTask, 0, sink); err != nil {
 		t.Fatal(err)
 	}
 	if !sink.summary.PhysicalAvailable || sink.summary.PhysicalFileSizeDelta != 200 {
@@ -100,7 +114,7 @@ func TestCalculatorRejectsIncompatibleSemanticVersions(t *testing.T) {
 	sink := &recordingSink{}
 	baseTask, targetTask := completedTasks()
 	targetTask.EtcdVersion = "3.5.1"
-	if err := domain.NewCalculator(100).Compare(context.Background(), baseline, target, baseTask, targetTask, sink); err != nil {
+	if err := domain.NewCalculator(100).Compare(context.Background(), baseline, target, baseTask, targetTask, 0, sink); err != nil {
 		t.Fatal(err)
 	}
 	if sink.summary.MVCCAvailable || sink.summary.MVCCUnavailableReason == "" || sink.summary.KubernetesAvailable || sink.summary.KubernetesUnavailableReason == "" {
@@ -114,7 +128,7 @@ func TestCalculatorClassifiesPresentToAbsentAsDeleted(t *testing.T) {
 	target := comparisonTaskDB(t, taskFixture{physicalBytes: 1000, keys: []keyFixture{{hash: "a", text: "/a", prefix: "/", present: &absent}}})
 	sink := &recordingSink{}
 	baseTask, targetTask := completedTasks()
-	if err := domain.NewCalculator(100).Compare(context.Background(), baseline, target, baseTask, targetTask, sink); err != nil {
+	if err := domain.NewCalculator(100).Compare(context.Background(), baseline, target, baseTask, targetTask, 0, sink); err != nil {
 		t.Fatal(err)
 	}
 	assertKeyDelta(t, sink.keys, "a", domain.ChangeDeleted, -100)
@@ -125,7 +139,7 @@ func TestCalculatorKeepsComponentChangesWhenTotalIsUnchanged(t *testing.T) {
 	target := comparisonTaskDB(t, taskFixture{physicalBytes: 1000, keys: []keyFixture{{hash: "a", text: "/a", prefix: "/", historical: 100}}})
 	sink := &recordingSink{}
 	baseTask, targetTask := completedTasks()
-	if err := domain.NewCalculator(100).Compare(context.Background(), baseline, target, baseTask, targetTask, sink); err != nil {
+	if err := domain.NewCalculator(100).Compare(context.Background(), baseline, target, baseTask, targetTask, 0, sink); err != nil {
 		t.Fatal(err)
 	}
 	if len(sink.keys) != 1 || sink.keys[0].CurrentBytesDelta != -100 || sink.keys[0].HistoricalBytesDelta != 100 || sink.keys[0].TotalBytesDelta != 0 {

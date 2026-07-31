@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS diff_summary (
   kubernetes_current_bytes_delta INTEGER NOT NULL,
   kubernetes_historical_bytes_delta INTEGER NOT NULL,
   revision_rate_available INTEGER NOT NULL,
-  average_revisions_per_second REAL NOT NULL
+  average_revisions_per_second REAL NOT NULL,
+  observation_window_seconds INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS diff_keys (

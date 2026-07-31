@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"etcd-analyzer/internal/task"
 )
@@ -33,7 +34,7 @@ func NewCalculator(batchSize int) *Calculator {
 }
 
 // Compare reads both source databases and writes signed deltas to sink.
-func (c *Calculator) Compare(ctx context.Context, baselineDB, targetDB *sql.DB, baseline, target task.Task, sink Sink) error {
+func (c *Calculator) Compare(ctx context.Context, baselineDB, targetDB *sql.DB, baseline, target task.Task, observationWindow time.Duration, sink Sink) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -47,7 +48,7 @@ func (c *Calculator) Compare(ctx context.Context, baselineDB, targetDB *sql.DB, 
 	if err := comparePhysical(ctx, baselineDB, targetDB, &summary); err != nil {
 		return err
 	}
-	mvccAvailable, err := compareMVCCSummary(ctx, baselineDB, targetDB, baseline, target, &summary)
+	mvccAvailable, err := compareMVCCSummary(ctx, baselineDB, targetDB, baseline, target, observationWindow, &summary)
 	if err != nil {
 		return err
 	}
@@ -136,7 +137,7 @@ type mvccSummary struct {
 	tombstones, tombstoneBytes                                          int64
 }
 
-func compareMVCCSummary(ctx context.Context, baselineDB, targetDB *sql.DB, baselineTask, targetTask task.Task, result *Summary) (bool, error) {
+func compareMVCCSummary(ctx context.Context, baselineDB, targetDB *sql.DB, baselineTask, targetTask task.Task, observationWindow time.Duration, result *Summary) (bool, error) {
 	baseline, err := readMVCC(ctx, baselineDB)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -173,10 +174,11 @@ func compareMVCCSummary(ctx context.Context, baselineDB, targetDB *sql.DB, basel
 	result.HistoricalBytesDelta = target.historyBytes - baseline.historyBytes
 	result.TombstoneCountDelta = target.tombstones - baseline.tombstones
 	result.TombstoneBytesDelta = target.tombstoneBytes - baseline.tombstoneBytes
-	seconds := targetTask.CreatedAt.Sub(baselineTask.CreatedAt).Seconds()
+	seconds := int64(observationWindow / time.Second)
 	if seconds > 0 {
+		result.ObservationWindowSeconds = seconds
 		result.RevisionRateAvailable = true
-		result.AverageRevisionsPerSecond = float64(result.RevisionCountDelta) / seconds
+		result.AverageRevisionsPerSecond = float64(result.RevisionCountDelta) / float64(seconds)
 	}
 	return true, nil
 }
