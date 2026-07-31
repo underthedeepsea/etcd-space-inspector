@@ -87,6 +87,34 @@ bin/etcd-analyzer report \
 
 默认只监听 `127.0.0.1`。监听非本地地址会输出安全警告。
 
+## 大 Snapshot 服务配置
+
+Web UI 的 `server` 子命令可通过 YAML 调整分析参数。以下也是当前适合大 Snapshot 的默认值：
+
+```yaml
+analysis:
+  workerCount: 4
+  channelSize: 128
+  sqliteBatchSize: 1000
+security:
+  maxInputBytes: 53687091200 # 50 GiB
+```
+
+`workerCount` 是 MVCC/Kubernetes 解码 worker 的上限；默认会取逻辑 CPU 数与 4 的较小值。`channelSize` 限制流水线中的在途记录，避免大 Value 导致不必要的内存峰值。`sqliteBatchSize` 保持 1000，以控制事务写入峰值。`maxInputBytes` 只是输入安全上限，不会提高导入速度。
+
+使用示例：
+
+```bash
+bin/etcd-analyzer server \
+  --config ./large-snapshot.yaml \
+  --data-dir ./analysis-data \
+  --listen 127.0.0.1:8080
+```
+
+`analyze` 子命令目前只支持 `--max-input-bytes`，其余分析参数由 `server --config` 使用。大 Snapshot 建议将数据目录置于本地 SSD、预留源文件与任务结果所需空间，并一次只运行一个导入任务，避免多个任务同时争用磁盘。
+
+Web UI 顶部可切换中文与 English；选择仅保存在当前浏览器本地。每张分析指标卡片旁的 `?` 可在鼠标悬停或键盘聚焦时显示该指标的定义。
+
 ## 数据目录
 
 ```text
