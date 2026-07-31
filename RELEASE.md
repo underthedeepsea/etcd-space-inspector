@@ -4,6 +4,8 @@
 
 | 版本与标签 | 发布分支 | 里程碑 | 主要能力 |
 | --- | --- | --- | --- |
+| `0.7.0`（开发中，尚未创建标签） | `release/0.7.0` | M7 | 单 Snapshot 的 Key 保留 revision 活跃度排行；双 Snapshot 的按 Key revision 增量与基于实际采集时间的每小时净保留 revision 速率。 |
+| `0.6.0` / `v0.6.0` | `release/0.6.0` | M6 | 从 DB 元数据识别 etcd 3.4 版本族；中英文界面、指标说明与大 Snapshot 默认参数优化。 |
 | `0.5.0` / `v0.5.0` | `release/0.5.0` | M5 | 对两个已完成 Snapshot 分析任务进行持久化空间差分，展示 Key、Prefix、Resource、Namespace 与 MVCC 增量；语义不兼容时明确降级。 |
 | `0.4.0` / `v0.4.0` | `m4-kubernetes-semantics`（历史） | M4 | Kubernetes Resource、Namespace、对象、字段和相邻 revision 增长分析。 |
 | `0.3.0` / `v0.3.0` | `m3-mvcc-analysis`（历史） | M3 | 版本门控的 etcd 3.4 MVCC revision、历史数据与 tombstone 分析。 |
@@ -13,7 +15,7 @@
 历史分支保留用于追溯，后续版本不沿用其命名方式。查看某个稳定版本时，优先检出对应标签，例如：
 
 ```bash
-git checkout v0.5.0
+git checkout v0.6.0
 ```
 
 新版本的工作分支会从最近的完成版本建立；在验证完成并合入 `main` 后，创建对应的注释标签并推送到 GitHub。

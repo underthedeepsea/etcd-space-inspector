@@ -379,7 +379,7 @@ function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void
         <Metric metricKey="comparison.revisionRecords" value={formatSigned(summary.revisionCountDelta)} />
         <Metric metricKey="comparison.historicalVersions" value={formatSigned(summary.historicalVersionsDelta)} />
         <Metric metricKey="comparison.tombstoneCount" value={formatSigned(summary.tombstoneCountDelta)} />
-        <Metric metricKey="comparison.revisionRate" value={summary.revisionRateAvailable ? `${summary.averageRevisionsPerSecond?.toFixed(2)} /s` : t('value.unavailable')} />
+        <Metric metricKey="comparison.revisionRate" value={summary.revisionRateAvailable ? `${(summary.averageRevisionsPerSecond ?? 0) * 3600 >= 0 ? '+' : ''}${((summary.averageRevisionsPerSecond ?? 0) * 3600).toFixed(2)} /h` : t('value.unavailable')} />
       </div>}
 
       {summary.mvccAvailable && <>
