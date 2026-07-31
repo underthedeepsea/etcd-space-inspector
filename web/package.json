@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "vite build"
+    "build": "vite build",
+    "test:locales": "tsc -p tsconfig.locales-test.json && node .locales-test/locales.test.js"
   },
   "dependencies": {
     "react": "19.1.0",

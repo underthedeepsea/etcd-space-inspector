@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { createContext, FormEvent, useCallback, useContext, useEffect, useState } from 'react';
 import {
   BucketStat,
   cancelComparison,
@@ -52,6 +52,25 @@ import {
   KubernetesObject,
   KubernetesSummary,
 } from './api';
+import {
+  languagePreferenceKey,
+  Locale,
+  metric,
+  MetricKey,
+  resolveLocale,
+  text,
+  TextKey,
+} from './locales';
+
+type Translate = (key: TextKey, values?: Record<string, string | number>) => string;
+
+const TranslationContext = createContext<{ locale: Locale; t: Translate } | null>(null);
+
+function useTranslation(): { locale: Locale; t: Translate } {
+  const translation = useContext(TranslationContext);
+  if (!translation) throw new Error('translation context is missing');
+  return translation;
+}
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -75,6 +94,48 @@ function formatSigned(value: number): string {
   return `${value > 0 ? '+' : '−'}${Math.abs(value)}`;
 }
 
+function formatDate(value: string, locale: Locale): string {
+  return new Date(value).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US');
+}
+
+function statusLabel(status: string, t: Translate): string {
+  const keys: Record<string, TextKey> = {
+    pending: 'status.pending', running: 'status.running', completed: 'status.completed',
+    failed: 'status.failed', cancelled: 'status.cancelled',
+  };
+  return t(keys[status] ?? 'value.unavailable');
+}
+
+function inputTypeLabel(inputType: string, t: Translate): string {
+  const keys: Record<string, TextKey> = { snapshot: 'type.snapshot', 'raw-db': 'type.raw-db' };
+  return t(keys[inputType] ?? 'value.unavailable');
+}
+
+function decodeStatusLabel(status: string, t: Translate): string {
+  const keys: Record<string, TextKey> = {
+    decoded_json: 'decode.decoded_json', decoded_protobuf: 'decode.decoded_protobuf',
+    encrypted: 'decode.encrypted', protobuf_unsupported: 'decode.protobuf_unsupported',
+    decode_failed: 'decode.decode_failed', format_unknown: 'decode.format_unknown',
+    path_unknown: 'decode.path_unknown',
+  };
+  return t(keys[status] ?? 'value.unavailable');
+}
+
+function pageTypeLabel(pageType: string, t: Translate): string {
+  const keys: Record<string, TextKey> = {
+    meta: 'physical.meta', branch: 'physical.branch', leaf: 'physical.leaf',
+    freelist: 'physical.freelist', free: 'physical.free',
+  };
+  return t(keys[pageType] ?? 'value.unavailable');
+}
+
+function changeTypeLabel(changeType: string, t: Translate): string {
+  const keys: Record<string, TextKey> = {
+    added: 'change.added', deleted: 'change.deleted', modified: 'change.modified',
+  };
+  return t(keys[changeType] ?? 'value.unavailable');
+}
+
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [comparisons, setComparisons] = useState<Comparison[]>([]);
@@ -83,6 +144,15 @@ export default function App() {
   const [selectedTask, setSelectedTask] = useState<string | null>(null);
   const [baselineTask, setBaselineTask] = useState<string | null>(null);
   const [selectedDiff, setSelectedDiff] = useState<string | null>(null);
+  const [locale, setLocale] = useState<Locale>(() => resolveLocale(
+    window.localStorage.getItem(languagePreferenceKey), window.navigator.language,
+  ));
+  const t = useCallback<Translate>((key, values) => text(locale, key, values), [locale]);
+
+  function selectLocale(nextLocale: Locale) {
+    setLocale(nextLocale);
+    window.localStorage.setItem(languagePreferenceKey, nextLocale);
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -90,9 +160,9 @@ export default function App() {
       setTasks(nextTasks);
       setComparisons(nextComparisons);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Unable to load tasks');
+      setMessage(error instanceof Error ? error.message : t('tasks.loadFailed'));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void refresh();
@@ -103,7 +173,7 @@ export default function App() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
-    setMessage('Importing source file…');
+    setMessage(t('tasks.importing'));
     const form = new FormData(event.currentTarget);
     try {
       await createTask({
@@ -113,10 +183,10 @@ export default function App() {
         etcdVersion: String(form.get('etcdVersion') ?? ''),
       });
       event.currentTarget.reset();
-      setMessage('Task created');
+      setMessage(t('tasks.createdMessage'));
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Unable to create task');
+      setMessage(error instanceof Error ? error.message : t('tasks.operationFailed'));
     } finally {
       setBusy(false);
     }
@@ -129,7 +199,7 @@ export default function App() {
       setMessage(success);
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Task operation failed');
+      setMessage(error instanceof Error ? error.message : t('tasks.operationFailed'));
     } finally {
       setBusy(false);
     }
@@ -146,77 +216,86 @@ export default function App() {
         targetTaskId: target.taskId,
       });
       setSelectedDiff(created.diffId);
-      setMessage('Comparison started');
+      setMessage(t('comparisons.started'));
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Unable to create comparison');
+      setMessage(error instanceof Error ? error.message : t('tasks.operationFailed'));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <main className="shell">
-      <header>
-        <p className="eyebrow">Offline forensics · v{__APP_VERSION__}</p>
-        <h1>etcd Space Inspector</h1>
-        <p>Import an immutable local snapshot or raw backend copy and track its analysis.</p>
+    <TranslationContext.Provider value={{ locale, t }}>
+    <main className="shell" lang={locale === 'zh' ? 'zh-CN' : 'en'}>
+      <header className="header">
+        <div>
+          <p className="eyebrow">{t('app.eyebrow', { version: __APP_VERSION__ })}</p>
+          <h1>etcd Space Inspector</h1>
+          <p>{t('app.description')}</p>
+        </div>
+        <div className="language-switch" aria-label={t('language.switch')}>
+          <button type="button" className={locale === 'zh' ? 'active' : ''} aria-pressed={locale === 'zh'} onClick={() => selectLocale('zh')}>{t('language.zh')}</button>
+          <button type="button" className={locale === 'en' ? 'active' : ''} aria-pressed={locale === 'en'} onClick={() => selectLocale('en')}>{t('language.en')}</button>
+        </div>
       </header>
 
       <section className="panel" aria-labelledby="new-task-heading">
-        <h2 id="new-task-heading">New analysis task</h2>
+        <h2 id="new-task-heading">{t('form.newTask')}</h2>
         <form onSubmit={submit} className="task-form">
-          <label>Task name<input name="name" required /></label>
-          <label>Local input path<input name="inputPath" required placeholder={'C:\\data\\snapshot.db or /data/snapshot.db'} /></label>
-          <label>Input type<select name="inputType"><option value="snapshot">Snapshot</option><option value="raw-db">Raw DB</option></select></label>
-          <label>etcd version override (optional)<input name="etcdVersion" placeholder="3.4.13" /></label>
-          <button type="submit" disabled={busy}>Create task</button>
+          <label>{t('form.name')}<input name="name" required /></label>
+          <label>{t('form.inputPath')}<input name="inputPath" required placeholder={'C:\\data\\snapshot.db or /data/snapshot.db'} /></label>
+          <label>{t('form.inputType')}<select name="inputType"><option value="snapshot">{t('form.snapshot')}</option><option value="raw-db">{t('form.rawDb')}</option></select></label>
+          <label>{t('form.versionOverride')}<input name="etcdVersion" placeholder="3.4.13" /></label>
+          <button type="submit" disabled={busy}>{t('form.createTask')}</button>
         </form>
       </section>
 
       <p className="status" role="status" aria-live="polite">{message}</p>
 
       <section className="panel" aria-labelledby="tasks-heading">
-        <div className="section-title"><h2 id="tasks-heading">Tasks</h2><button type="button" onClick={() => void refresh()}>Refresh</button></div>
+        <div className="section-title"><h2 id="tasks-heading">{t('tasks.title')}</h2><button type="button" onClick={() => void refresh()}>{t('tasks.refresh')}</button></div>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Status</th><th>Progress</th><th>Created</th><th>Actions</th></tr></thead>
+            <thead><tr><th>{t('tasks.name')}</th><th>{t('tasks.type')}</th><th>{t('tasks.size')}</th><th>{t('tasks.status')}</th><th>{t('tasks.progress')}</th><th>{t('tasks.created')}</th><th>{t('tasks.actions')}</th></tr></thead>
             <tbody>
               {tasks.map((task) => (
                 <tr key={task.taskId}>
-                  <td><strong>{task.name}</strong><small>{task.sha256.slice(0, 12)}</small><small>{versionEvidence(task)}</small></td>
-                  <td>{task.inputType}</td><td>{formatBytes(task.inputSize)}</td><td><span className={`badge ${task.status}`}>{task.status}</span></td>
+                  <td><strong>{task.name}</strong><small>{task.sha256.slice(0, 12)}</small><small>{versionEvidence(task, t)}</small></td>
+                  <td>{inputTypeLabel(task.inputType, t)}</td><td>{formatBytes(task.inputSize)}</td><td><span className={`badge ${task.status}`}>{statusLabel(task.status, t)}</span></td>
                   <td><progress max="1" value={task.progress}>{Math.round(task.progress * 100)}%</progress></td>
-                  <td>{new Date(task.createdAt).toLocaleString()}</td>
+                  <td>{formatDate(task.createdAt, locale)}</td>
                   <td className="actions">
-                    {task.status === 'completed' && <button onClick={() => setSelectedTask(task.taskId)}>Inspect</button>}
-                    {task.status === 'completed' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? void compare(task) : setBaselineTask(task.taskId)}>{baselineTask ? 'Compare' : 'Set baseline'}</button>}
-                    {task.status === 'completed' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>Baseline ✓</button>}
-                    {task.status === 'pending' && <button disabled={busy} onClick={() => void action(() => startTask(task.taskId), 'Task started')}>Start</button>}
-                    {task.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelTask(task.taskId), 'Cancellation requested')}>Cancel</button>}
-                    {task.status !== 'running' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteTask(task.taskId), 'Task deleted')}>Delete</button>}
+                    {task.status === 'completed' && <button onClick={() => setSelectedTask(task.taskId)}>{t('tasks.inspect')}</button>}
+                    {task.status === 'completed' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? void compare(task) : setBaselineTask(task.taskId)}>{baselineTask ? t('tasks.compare') : t('tasks.setBaseline')}</button>}
+                    {task.status === 'completed' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>{t('tasks.baseline')}</button>}
+                    {task.status === 'pending' && <button disabled={busy} onClick={() => void action(() => startTask(task.taskId), t('tasks.started'))}>{t('tasks.start')}</button>}
+                    {task.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelTask(task.taskId), t('tasks.cancelled'))}>{t('tasks.cancel')}</button>}
+                    {task.status !== 'running' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteTask(task.taskId), t('tasks.deleted'))}>{t('tasks.delete')}</button>}
                   </td>
                 </tr>
               ))}
-              {tasks.length === 0 && <tr><td colSpan={7} className="empty">No tasks yet.</td></tr>}
+              {tasks.length === 0 && <tr><td colSpan={7} className="empty">{t('tasks.empty')}</td></tr>}
             </tbody>
           </table>
         </div>
       </section>
       <section className="panel comparison-list" aria-labelledby="comparisons-heading">
-        <h2 id="comparisons-heading">Snapshot comparisons</h2>
-        <div className="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Progress</th><th>Created</th><th></th></tr></thead><tbody>
-          {comparisons.map((item) => <tr key={item.diffId}><td>{item.name}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td><progress max="1" value={item.progress} /></td><td>{new Date(item.createdAt).toLocaleString()}</td><td className="actions">{item.status === 'completed' && <button onClick={() => setSelectedDiff(item.diffId)}>Open</button>}{item.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelComparison(item.diffId), 'Comparison cancellation requested')}>Cancel</button>}{item.status !== 'running' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteComparison(item.diffId), 'Comparison deleted')}>Delete</button>}</td></tr>)}
-          {comparisons.length === 0 && <tr><td colSpan={5} className="empty">No comparisons yet.</td></tr>}
+        <h2 id="comparisons-heading">{t('comparisons.title')}</h2>
+        <div className="table-wrap"><table><thead><tr><th>{t('comparisons.name')}</th><th>{t('comparisons.status')}</th><th>{t('comparisons.progress')}</th><th>{t('comparisons.created')}</th><th></th></tr></thead><tbody>
+          {comparisons.map((item) => <tr key={item.diffId}><td>{item.name}</td><td><span className={`badge ${item.status}`}>{statusLabel(item.status, t)}</span></td><td><progress max="1" value={item.progress} /></td><td>{formatDate(item.createdAt, locale)}</td><td className="actions">{item.status === 'completed' && <button onClick={() => setSelectedDiff(item.diffId)}>{t('comparisons.open')}</button>}{item.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelComparison(item.diffId), t('comparisons.cancelled'))}>{t('tasks.cancel')}</button>}{item.status !== 'running' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteComparison(item.diffId), t('comparisons.deleted'))}>{t('tasks.delete')}</button>}</td></tr>)}
+          {comparisons.length === 0 && <tr><td colSpan={5} className="empty">{t('comparisons.empty')}</td></tr>}
         </tbody></table></div>
       </section>
       {selectedTask && <PhysicalAnalysis taskId={selectedTask} onClose={() => setSelectedTask(null)} />}
       {selectedDiff && <DiffAnalysis diffId={selectedDiff} onClose={() => setSelectedDiff(null)} />}
     </main>
+    </TranslationContext.Provider>
   );
 }
 
 function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void }) {
+  const { t } = useTranslation();
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [summary, setSummary] = useState<DiffSummary | null>(null);
   const [growth, setGrowth] = useState<DiffKeyResult | null>(null);
@@ -246,7 +325,7 @@ function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void
           timer = window.setTimeout(() => void load(), 1000);
         }
       } catch (reason) {
-        if (active) setError(reason instanceof Error ? reason.message : 'Unable to load comparison');
+        if (active) setError(reason instanceof Error ? reason.message : t('comparisons.loadFailed'));
       }
     }
     void load();
@@ -254,50 +333,50 @@ function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void
       active = false;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [diffId]);
+  }, [diffId, t]);
 
   return <section className="panel analysis comparison" aria-labelledby="comparison-heading">
-    <div className="section-title"><h2 id="comparison-heading">Snapshot comparison</h2><button onClick={onClose}>Close</button></div>
+    <div className="section-title"><h2 id="comparison-heading">{t('comparison.title')}</h2><button onClick={onClose}>{t('actions.close')}</button></div>
     {error && <p role="alert">{error}</p>}
-    {comparison && <p><strong>{comparison.name}</strong> · <span className={`badge ${comparison.status}`}>{comparison.status}</span> · {comparison.baselineTaskId} → {comparison.targetTaskId}</p>}
-    {comparison && comparison.status !== 'completed' && comparison.status !== 'failed' && comparison.status !== 'cancelled' && <p>Calculating… {Math.round(comparison.progress * 100)}%</p>}
+    {comparison && <p><strong>{comparison.name}</strong> · <span className={`badge ${comparison.status}`}>{statusLabel(comparison.status, t)}</span> · {comparison.baselineTaskId} → {comparison.targetTaskId}</p>}
+    {comparison && comparison.status !== 'completed' && comparison.status !== 'failed' && comparison.status !== 'cancelled' && <p>{t('comparisons.calculating', { progress: Math.round(comparison.progress * 100) })}</p>}
     {comparison?.errorMessage && <p className="notice">{comparison.errorMessage}</p>}
     {summary && <>
       <div className="metrics">
-        <Metric label="DB file" value={formatSignedBytes(summary.physicalFileSizeDelta)} />
-        <Metric label="Current data" value={formatSignedBytes(summary.currentStoredBytesDelta)} />
-        <Metric label="Historical revisions" value={formatSignedBytes(summary.historicalBytesDelta)} />
-        <Metric label="Tombstones" value={formatSignedBytes(summary.tombstoneBytesDelta)} />
-        <Metric label="Free pages" value={formatSignedBytes(summary.freePageBytesDelta)} />
+        <Metric metricKey="comparison.physicalFile" value={formatSignedBytes(summary.physicalFileSizeDelta)} />
+        <Metric metricKey="comparison.currentData" value={formatSignedBytes(summary.currentStoredBytesDelta)} />
+        <Metric metricKey="comparison.historicalBytes" value={formatSignedBytes(summary.historicalBytesDelta)} />
+        <Metric metricKey="comparison.tombstoneBytes" value={formatSignedBytes(summary.tombstoneBytesDelta)} />
+        <Metric metricKey="comparison.freePageBytes" value={formatSignedBytes(summary.freePageBytesDelta)} />
       </div>
-      {!summary.physicalAvailable && <p className="notice">Physical comparison unavailable: {summary.physicalUnavailableReason}</p>}
-      {!summary.mvccAvailable && <p className="notice">MVCC comparison unavailable: {summary.mvccUnavailableReason}. Physical results remain valid.</p>}
-      {!summary.kubernetesAvailable && <p className="notice">Kubernetes comparison unavailable: {summary.kubernetesUnavailableReason}</p>}
+      {!summary.physicalAvailable && <p className="notice">{t('comparisons.physicalUnavailable', { reason: summary.physicalUnavailableReason ?? t('value.unavailable') })}</p>}
+      {!summary.mvccAvailable && <p className="notice">{t('comparisons.mvccUnavailable', { reason: summary.mvccUnavailableReason ?? t('value.unavailable') })}</p>}
+      {!summary.kubernetesAvailable && <p className="notice">{t('comparisons.kubernetesUnavailable', { reason: summary.kubernetesUnavailableReason ?? t('value.unavailable') })}</p>}
       {summary.mvccAvailable && <div className="metrics">
-        <Metric label="Current keys" value={formatSigned(summary.currentKeyCountDelta)} />
-        <Metric label="Revision records" value={formatSigned(summary.revisionCountDelta)} />
-        <Metric label="Historical versions" value={formatSigned(summary.historicalVersionsDelta)} />
-        <Metric label="Tombstones" value={formatSigned(summary.tombstoneCountDelta)} />
-        <Metric label="Revision rate" value={summary.revisionRateAvailable ? `${summary.averageRevisionsPerSecond?.toFixed(2)} /s` : 'Unavailable'} />
+        <Metric metricKey="comparison.currentKeys" value={formatSigned(summary.currentKeyCountDelta)} />
+        <Metric metricKey="comparison.revisionRecords" value={formatSigned(summary.revisionCountDelta)} />
+        <Metric metricKey="comparison.historicalVersions" value={formatSigned(summary.historicalVersionsDelta)} />
+        <Metric metricKey="comparison.tombstoneCount" value={formatSigned(summary.tombstoneCountDelta)} />
+        <Metric metricKey="comparison.revisionRate" value={summary.revisionRateAvailable ? `${summary.averageRevisionsPerSecond?.toFixed(2)} /s` : t('value.unavailable')} />
       </div>}
 
       {summary.mvccAvailable && <>
         <div className="ranking-grid">
-          <DiffKeyTable title="Top growth keys" result={growth} />
-          <DiffKeyTable title="Top shrinking keys" result={shrink} />
+          <DiffKeyTable title={t('comparison.topGrowth')} result={growth} />
+          <DiffKeyTable title={t('comparison.topShrinking')} result={shrink} />
         </div>
-        <h3>Prefix growth</h3>
-        <div className="table-wrap"><table><thead><tr><th>Prefix</th><th>Current</th><th>History</th><th>Tombstone</th><th>Total</th></tr></thead><tbody>
+        <h3>{t('comparison.prefixGrowth')}</h3>
+        <div className="table-wrap"><table><thead><tr><th>{t('comparison.prefix')}</th><th>{t('comparison.current')}</th><th>{t('comparison.history')}</th><th>{t('comparison.tombstone')}</th><th>{t('comparison.total')}</th></tr></thead><tbody>
           {prefixes.map((item) => <tr key={item.prefix}><td><code>{item.prefix}</code></td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td><td>{formatSignedBytes(item.tombstoneBytesDelta)}</td><td>{formatSignedBytes(item.totalBytesDelta)}</td></tr>)}
         </tbody></table></div>
       </>}
 
       {summary.kubernetesAvailable && <div className="ranking-grid">
-        <div><h3>Resource growth</h3><div className="table-wrap"><table><thead><tr><th>Resource</th><th>Objects</th><th>Current</th><th>History</th></tr></thead><tbody>
-          {resources.map((item) => <tr key={`${item.apiGroup}/${item.resource}`}><td>{item.apiGroup || 'core'}/{item.resource}</td><td>{formatSigned(item.currentObjectsDelta)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td></tr>)}
+        <div><h3>{t('comparison.resourceGrowth')}</h3><div className="table-wrap"><table><thead><tr><th>{t('comparison.resource')}</th><th>{t('comparison.objects')}</th><th>{t('comparison.current')}</th><th>{t('comparison.history')}</th></tr></thead><tbody>
+          {resources.map((item) => <tr key={`${item.apiGroup}/${item.resource}`}><td>{item.apiGroup || t('value.core')}/{item.resource}</td><td>{formatSigned(item.currentObjectsDelta)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td></tr>)}
         </tbody></table></div></div>
-        <div><h3>Namespace growth</h3><div className="table-wrap"><table><thead><tr><th>Namespace</th><th>Objects</th><th>Current</th><th>History</th></tr></thead><tbody>
-          {namespaces.map((item) => <tr key={item.namespace || 'cluster-scoped'}><td>{item.namespace || '(cluster-scoped)'}</td><td>{formatSigned(item.currentObjectsDelta)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td></tr>)}
+        <div><h3>{t('comparison.namespaceGrowth')}</h3><div className="table-wrap"><table><thead><tr><th>{t('comparison.namespace')}</th><th>{t('comparison.objects')}</th><th>{t('comparison.current')}</th><th>{t('comparison.history')}</th></tr></thead><tbody>
+          {namespaces.map((item) => <tr key={item.namespace || 'cluster-scoped'}><td>{item.namespace || t('value.clusterScoped')}</td><td>{formatSigned(item.currentObjectsDelta)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td></tr>)}
         </tbody></table></div></div>
       </div>}
     </>}
@@ -305,12 +384,14 @@ function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void
 }
 
 function DiffKeyTable({ title, result }: { title: string; result: DiffKeyResult | null }) {
-  return <div><h3>{title}</h3><div className="table-wrap"><table><thead><tr><th>Key</th><th>Change</th><th>Current</th><th>History</th><th>Total</th></tr></thead><tbody>
-    {result?.items.map((item) => <tr key={item.keyHash}><td><code>{item.key}</code></td><td>{item.changeType}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td><td>{formatSignedBytes(item.totalBytesDelta)}</td></tr>)}
+  const { t } = useTranslation();
+  return <div><h3>{title}</h3><div className="table-wrap"><table><thead><tr><th>{t('comparison.key')}</th><th>{t('comparison.change')}</th><th>{t('comparison.current')}</th><th>{t('comparison.history')}</th><th>{t('comparison.total')}</th></tr></thead><tbody>
+    {result?.items.map((item) => <tr key={item.keyHash}><td><code>{item.key}</code></td><td>{changeTypeLabel(item.changeType, t)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td><td>{formatSignedBytes(item.totalBytesDelta)}</td></tr>)}
   </tbody></table></div></div>;
 }
 
 function PhysicalAnalysis({ taskId, onClose }: { taskId: string; onClose: () => void }) {
+  const { t } = useTranslation();
   const [summary, setSummary] = useState<SpaceSummary | null>(null);
   const [buckets, setBuckets] = useState<BucketStat[]>([]);
   const [pages, setPages] = useState<PageResult | null>(null);
@@ -326,39 +407,39 @@ function PhysicalAnalysis({ taskId, onClose }: { taskId: string; onClose: () => 
         setSummary(nextSummary); setBuckets(nextBuckets); setPages(nextPages); setError('');
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Unable to load physical analysis');
+        if (active) setError(reason instanceof Error ? reason.message : t('physical.loadFailed'));
       });
     return () => { active = false; };
-  }, [taskId, page, pageType]);
+  }, [taskId, page, pageType, t]);
 
   const freePercent = Math.min(100, Math.max(0, (summary?.fragmentationRatio ?? 0) * 100));
   return (
     <section className="panel analysis" aria-labelledby="analysis-heading">
-      <div className="section-title"><h2 id="analysis-heading">Physical bbolt analysis</h2><button onClick={onClose}>Close</button></div>
+      <div className="section-title"><h2 id="analysis-heading">{t('physical.title')}</h2><button onClick={onClose}>{t('actions.close')}</button></div>
       {error && <p role="alert">{error}</p>}
       {summary && <>
         <div className="metrics">
-          <Metric label="Physical file" value={formatBytes(summary.physicalFileSize)} />
-          <Metric label="In use" value={formatBytes(summary.inUsePageBytes)} />
-          <Metric label="Free" value={formatBytes(summary.freePageBytes)} />
-          <Metric label="Fragmentation" value={`${freePercent.toFixed(1)}%`} />
-          <Metric label="Pages" value={String(summary.pageCount)} />
+          <Metric metricKey="physical.file" value={formatBytes(summary.physicalFileSize)} />
+          <Metric metricKey="physical.inUse" value={formatBytes(summary.inUsePageBytes)} />
+          <Metric metricKey="physical.free" value={formatBytes(summary.freePageBytes)} />
+          <Metric metricKey="physical.fragmentation" value={`${freePercent.toFixed(1)}%`} />
+          <Metric metricKey="physical.pages" value={String(summary.pageCount)} />
         </div>
-        <div className="composition" aria-label={`${freePercent.toFixed(1)}% free space`}>
+        <div className="composition" aria-label={t('physical.freeSpace', { percent: freePercent.toFixed(1) })}>
           <span className="in-use" style={{ width: `${100 - freePercent}%` }} /><span className="free" style={{ width: `${freePercent}%` }} />
         </div>
       </>}
 
-      <h3>Largest buckets</h3>
-      <div className="table-wrap"><table><thead><tr><th>Bucket</th><th>Keys</th><th>Allocated</th><th>Used</th><th>Overflow</th></tr></thead>
+      <h3>{t('physical.largestBuckets')}</h3>
+      <div className="table-wrap"><table><thead><tr><th>{t('physical.bucket')}</th><th>{t('physical.keys')}</th><th>{t('physical.allocated')}</th><th>{t('physical.used')}</th><th>{t('physical.overflow')}</th></tr></thead>
         <tbody>{buckets.map((bucket) => <tr key={bucket.bucketPath}><td>{bucket.bucketPath}</td><td>{bucket.keyCount}</td><td>{formatBytes(bucket.totalBytes)}</td><td>{formatBytes(bucket.usedBytes)}</td><td>{formatBytes(bucket.overflowBytes)}</td></tr>)}</tbody>
       </table></div>
 
-      <div className="section-title"><h3>Pages</h3><label>Type<select value={pageType} onChange={(event) => { setPageType(event.target.value); setPage(1); }}><option value="">All</option><option value="meta">Meta</option><option value="branch">Branch</option><option value="leaf">Leaf</option><option value="freelist">Freelist</option><option value="free">Free</option></select></label></div>
-      <div className="table-wrap"><table><thead><tr><th>ID</th><th>Type</th><th>Overflow</th><th>Bytes</th><th>Utilization</th></tr></thead>
-        <tbody>{pages?.items.map((item) => <tr key={item.pageId}><td>{item.pageId}</td><td>{item.pageType}</td><td>{item.overflow}</td><td>{formatBytes(item.totalBytes)}</td><td>{Math.round(item.utilization * 100)}%</td></tr>)}</tbody>
+      <div className="section-title"><h3>{t('physical.pages')}</h3><label>{t('physical.pageType')}<select value={pageType} onChange={(event) => { setPageType(event.target.value); setPage(1); }}><option value="">{t('physical.all')}</option><option value="meta">{t('physical.meta')}</option><option value="branch">{t('physical.branch')}</option><option value="leaf">{t('physical.leaf')}</option><option value="freelist">{t('physical.freelist')}</option><option value="free">{t('physical.free')}</option></select></label></div>
+      <div className="table-wrap"><table><thead><tr><th>{t('physical.id')}</th><th>{t('physical.pageType')}</th><th>{t('physical.overflow')}</th><th>{t('physical.bytes')}</th><th>{t('physical.utilization')}</th></tr></thead>
+        <tbody>{pages?.items.map((item) => <tr key={item.pageId}><td>{item.pageId}</td><td>{pageTypeLabel(item.pageType, t)}</td><td>{item.overflow}</td><td>{formatBytes(item.totalBytes)}</td><td>{Math.round(item.utilization * 100)}%</td></tr>)}</tbody>
       </table></div>
-      <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button><span>Page {page} · {pages?.total ?? 0} records</span><button disabled={!pages || page * pages.pageSize >= pages.total} onClick={() => setPage((value) => value + 1)}>Next</button></div>
+      <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t('pagination.previous')}</button><span>{t('pagination.records', { page, count: pages?.total ?? 0 })}</span><button disabled={!pages || page * pages.pageSize >= pages.total} onClick={() => setPage((value) => value + 1)}>{t('pagination.next')}</button></div>
       <SemanticAnalysis taskId={taskId} />
     </section>
   );
@@ -367,6 +448,7 @@ function PhysicalAnalysis({ taskId, onClose }: { taskId: string; onClose: () => 
 const initialKeyFilters: KeyFilters = { prefix: '', minSize: '', minRevisions: '', tombstone: false, sort: 'historical_bytes' };
 
 function SemanticAnalysis({ taskId }: { taskId: string }) {
+  const { t } = useTranslation();
   const [summary, setSummary] = useState<MVCCSummary | null>(null);
   const [prefixes, setPrefixes] = useState<PrefixStat[]>([]);
   const [keys, setKeys] = useState<KeyResult | null>(null);
@@ -384,57 +466,57 @@ function SemanticAnalysis({ taskId }: { taskId: string }) {
         setSummary(nextSummary); setPrefixes(nextPrefixes); setKeys(nextKeys); setError('');
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Unable to load MVCC analysis');
+        if (active) setError(reason instanceof Error ? reason.message : t('semantic.loadFailed'));
       });
     return () => { active = false; };
-  }, [taskId, page, filters]);
+  }, [taskId, page, filters, t]);
 
   async function inspect(key: KeyRecord) {
     setSelectedKey(key);
     try {
       setRevisions(await listKeyRevisions(taskId, key.id));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to load revisions');
+      setError(reason instanceof Error ? reason.message : t('semantic.revisionLoadFailed'));
     }
   }
 
-  if (!summary && !error) return <p>Loading MVCC analysis…</p>;
+  if (!summary && !error) return <p>{t('semantic.loading')}</p>;
   return <div className="semantic">
-    <h3>MVCC history</h3>
+    <h3>{t('semantic.title')}</h3>
     {error && <p role="alert">{error}</p>}
-    {summary && !summary.semanticAvailable && <p className="notice">Semantic decoding was skipped because the source was not confirmed as etcd 3.4.x. Physical results remain valid.</p>}
+    {summary && !summary.semanticAvailable && <p className="notice">{t('semantic.unavailable')}</p>}
     {summary?.semanticAvailable && <>
       <div className="metrics">
-        <Metric label="Current keys" value={String(summary.currentKeyCount)} />
-        <Metric label="Current stored" value={formatBytes(summary.currentStoredBytes)} />
-        <Metric label="Historical versions" value={String(summary.historicalVersions)} />
-        <Metric label="Historical bytes" value={formatBytes(summary.historicalBytes)} />
-        <Metric label="Tombstones" value={String(summary.tombstoneCount)} />
+        <Metric metricKey="mvcc.currentKeys" value={String(summary.currentKeyCount)} />
+        <Metric metricKey="mvcc.currentStored" value={formatBytes(summary.currentStoredBytes)} />
+        <Metric metricKey="mvcc.historicalVersions" value={String(summary.historicalVersions)} />
+        <Metric metricKey="mvcc.historicalBytes" value={formatBytes(summary.historicalBytes)} />
+        <Metric metricKey="mvcc.tombstones" value={String(summary.tombstoneCount)} />
       </div>
 
-      <h3>Top prefixes</h3>
-      <div className="table-wrap"><table><thead><tr><th>Prefix</th><th>Current keys</th><th>History</th><th>Tombstones</th></tr></thead>
+      <h3>{t('semantic.topPrefixes')}</h3>
+      <div className="table-wrap"><table><thead><tr><th>{t('semantic.prefix')}</th><th>{t('semantic.currentKeys')}</th><th>{t('semantic.history')}</th><th>{t('semantic.tombstones')}</th></tr></thead>
         <tbody>{prefixes.map((prefix) => <tr key={prefix.prefix}><td><code>{prefix.prefix}</code></td><td>{prefix.currentKeyCount}</td><td>{formatBytes(prefix.historicalBytes)}</td><td>{prefix.tombstoneCount}</td></tr>)}</tbody>
       </table></div>
 
-      <div className="section-title"><h3>Keys</h3><button type="button" onClick={() => { setFilters(initialKeyFilters); setPage(1); }}>Reset filters</button></div>
+      <div className="section-title"><h3>{t('semantic.keys')}</h3><button type="button" onClick={() => { setFilters(initialKeyFilters); setPage(1); }}>{t('semantic.resetFilters')}</button></div>
       <div className="filters">
-        <label>Prefix<input value={filters.prefix} onChange={(event) => { setFilters({ ...filters, prefix: event.target.value }); setPage(1); }} placeholder="/registry" /></label>
-        <label>Minimum bytes<input type="number" min="0" value={filters.minSize} onChange={(event) => { setFilters({ ...filters, minSize: event.target.value }); setPage(1); }} /></label>
-        <label>Minimum revisions<input type="number" min="0" value={filters.minRevisions} onChange={(event) => { setFilters({ ...filters, minRevisions: event.target.value }); setPage(1); }} /></label>
-        <label>Sort<select value={filters.sort} onChange={(event) => { setFilters({ ...filters, sort: event.target.value as KeyFilters['sort'] }); setPage(1); }}><option value="historical_bytes">Historical bytes</option><option value="current_bytes">Current bytes</option><option value="revision_count">Revisions</option><option value="tombstone_count">Tombstones</option><option value="key">Key</option></select></label>
-        <label className="check"><input type="checkbox" checked={filters.tombstone} onChange={(event) => { setFilters({ ...filters, tombstone: event.target.checked }); setPage(1); }} />Has tombstones</label>
+        <label>{t('semantic.prefix')}<input value={filters.prefix} onChange={(event) => { setFilters({ ...filters, prefix: event.target.value }); setPage(1); }} placeholder="/registry" /></label>
+        <label>{t('semantic.minimumBytes')}<input type="number" min="0" value={filters.minSize} onChange={(event) => { setFilters({ ...filters, minSize: event.target.value }); setPage(1); }} /></label>
+        <label>{t('semantic.minimumRevisions')}<input type="number" min="0" value={filters.minRevisions} onChange={(event) => { setFilters({ ...filters, minRevisions: event.target.value }); setPage(1); }} /></label>
+        <label>{t('semantic.sort')}<select value={filters.sort} onChange={(event) => { setFilters({ ...filters, sort: event.target.value as KeyFilters['sort'] }); setPage(1); }}><option value="historical_bytes">{t('semantic.sortHistory')}</option><option value="current_bytes">{t('semantic.sortCurrent')}</option><option value="revision_count">{t('semantic.sortRevisions')}</option><option value="tombstone_count">{t('semantic.sortTombstones')}</option><option value="key">{t('semantic.sortKey')}</option></select></label>
+        <label className="check"><input type="checkbox" checked={filters.tombstone} onChange={(event) => { setFilters({ ...filters, tombstone: event.target.checked }); setPage(1); }} />{t('semantic.hasTombstones')}</label>
       </div>
-      <div className="table-wrap"><table><thead><tr><th>Key</th><th>Present</th><th>Current</th><th>History</th><th>Revisions</th><th>Tombstones</th><th></th></tr></thead>
-        <tbody>{keys?.items.map((key) => <tr key={key.id}><td><code>{key.keyText}</code></td><td>{key.present ? 'yes' : 'no'}</td><td>{formatBytes(key.currentStoredBytes)}</td><td>{formatBytes(key.historicalBytes)}</td><td>{key.revisionCount}</td><td>{key.tombstoneCount}</td><td><button type="button" onClick={() => void inspect(key)}>Revisions</button></td></tr>)}</tbody>
+      <div className="table-wrap"><table><thead><tr><th>{t('comparison.key')}</th><th>{t('semantic.present')}</th><th>{t('semantic.current')}</th><th>{t('semantic.history')}</th><th>{t('semantic.revisions')}</th><th>{t('semantic.tombstones')}</th><th></th></tr></thead>
+        <tbody>{keys?.items.map((key) => <tr key={key.id}><td><code>{key.keyText}</code></td><td>{key.present ? t('boolean.yes') : t('boolean.no')}</td><td>{formatBytes(key.currentStoredBytes)}</td><td>{formatBytes(key.historicalBytes)}</td><td>{key.revisionCount}</td><td>{key.tombstoneCount}</td><td><button type="button" onClick={() => void inspect(key)}>{t('semantic.revisions')}</button></td></tr>)}</tbody>
       </table></div>
-      <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button><span>Page {page} · {keys?.total ?? 0} keys</span><button disabled={!keys || page * keys.pageSize >= keys.total} onClick={() => setPage((value) => value + 1)}>Next</button></div>
+      <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t('pagination.previous')}</button><span>{t('pagination.keys', { page, count: keys?.total ?? 0 })}</span><button disabled={!keys || page * keys.pageSize >= keys.total} onClick={() => setPage((value) => value + 1)}>{t('pagination.next')}</button></div>
 
-      {selectedKey && <div className="drawer" role="region" aria-label="Key revision details">
-        <div className="section-title"><h3><code>{selectedKey.keyText}</code></h3><button type="button" onClick={() => { setSelectedKey(null); setRevisions([]); }}>Close</button></div>
-        <p className="hash">Key hash: {selectedKey.keyHash}</p>
-        <div className="table-wrap"><table><thead><tr><th>Main</th><th>Sub</th><th>Version</th><th>Stored bytes</th><th>Tombstone</th><th>Value hash</th></tr></thead>
-          <tbody>{revisions.map((revision) => <tr key={`${revision.mainRevision}-${revision.subRevision}`}><td>{revision.mainRevision}</td><td>{revision.subRevision}</td><td>{revision.version}</td><td>{formatBytes(revision.storedBytes)}</td><td>{revision.tombstone ? 'yes' : 'no'}</td><td><code>{revision.valueHash.slice(0, 16)}</code></td></tr>)}</tbody>
+      {selectedKey && <div className="drawer" role="region" aria-label={t('semantic.keyRevisionDetails')}>
+        <div className="section-title"><h3><code>{selectedKey.keyText}</code></h3><button type="button" onClick={() => { setSelectedKey(null); setRevisions([]); }}>{t('actions.close')}</button></div>
+        <p className="hash">{t('semantic.keyHash', { hash: selectedKey.keyHash })}</p>
+        <div className="table-wrap"><table><thead><tr><th>{t('semantic.main')}</th><th>{t('semantic.sub')}</th><th>{t('semantic.version')}</th><th>{t('semantic.storedBytes')}</th><th>{t('semantic.tombstone')}</th><th>{t('semantic.valueHash')}</th></tr></thead>
+          <tbody>{revisions.map((revision) => <tr key={`${revision.mainRevision}-${revision.subRevision}`}><td>{revision.mainRevision}</td><td>{revision.subRevision}</td><td>{revision.version}</td><td>{formatBytes(revision.storedBytes)}</td><td>{revision.tombstone ? t('boolean.yes') : t('boolean.no')}</td><td><code>{revision.valueHash.slice(0, 16)}</code></td></tr>)}</tbody>
         </table></div>
       </div>}
     </>}
@@ -448,6 +530,7 @@ const initialObjectFilters: ObjectFilters = {
 };
 
 function KubernetesAnalysis({ taskId }: { taskId: string }) {
+  const { t } = useTranslation();
   const [summary, setSummary] = useState<KubernetesSummary | null>(null);
   const [resources, setResources] = useState<ResourceStat[]>([]);
   const [namespaces, setNamespaces] = useState<NamespaceStat[]>([]);
@@ -468,10 +551,10 @@ function KubernetesAnalysis({ taskId }: { taskId: string }) {
       setSummary(nextSummary); setResources(nextResources); setNamespaces(nextNamespaces);
       setObjects(nextObjects); setError('');
     }).catch((reason: unknown) => {
-      if (active) setError(reason instanceof Error ? reason.message : 'Unable to load Kubernetes analysis');
+      if (active) setError(reason instanceof Error ? reason.message : t('kubernetes.loadFailed'));
     });
     return () => { active = false; };
-  }, [taskId, page, filters]);
+  }, [taskId, page, filters, t]);
 
   async function inspect(item: KubernetesObject) {
     try {
@@ -480,82 +563,84 @@ function KubernetesAnalysis({ taskId }: { taskId: string }) {
       ]);
       setSelectedObject(nextObject); setRevisions(nextRevisions); setError('');
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to load object revisions');
+      setError(reason instanceof Error ? reason.message : t('kubernetes.objectRevisionLoadFailed'));
     }
   }
 
   return <div className="kubernetes">
-    <h3>Kubernetes storage</h3>
+    <h3>{t('kubernetes.title')}</h3>
     {error && <p role="alert">{error}</p>}
-    {!summary && !error && <p>Loading Kubernetes analysis…</p>}
-    {summary && !summary.semanticAvailable && <p className="notice">Kubernetes semantics were skipped because MVCC decoding was unavailable.</p>}
+    {!summary && !error && <p>{t('kubernetes.loading')}</p>}
+    {summary && !summary.semanticAvailable && <p className="notice">{t('kubernetes.unavailable')}</p>}
     {summary?.semanticAvailable && <>
       <div className="metrics">
-        <Metric label="Current objects" value={String(summary.currentObjects)} />
-        <Metric label="Current bytes" value={formatBytes(summary.currentBytes)} />
-        <Metric label="Historical bytes" value={formatBytes(summary.historicalBytes)} />
-        <Metric label="JSON revisions" value={String(summary.decodedJson)} />
-        <Metric label="Protobuf revisions" value={String(summary.decodedProtobuf)} />
-        <Metric label="Encrypted" value={String(summary.encrypted)} />
+        <Metric metricKey="kubernetes.currentObjects" value={String(summary.currentObjects)} />
+        <Metric metricKey="kubernetes.currentBytes" value={formatBytes(summary.currentBytes)} />
+        <Metric metricKey="kubernetes.historicalBytes" value={formatBytes(summary.historicalBytes)} />
+        <Metric metricKey="kubernetes.jsonRevisions" value={String(summary.decodedJson)} />
+        <Metric metricKey="kubernetes.protobufRevisions" value={String(summary.decodedProtobuf)} />
+        <Metric metricKey="kubernetes.encrypted" value={String(summary.encrypted)} />
       </div>
 
       <div className="ranking-grid">
-        <div><h4>Top resources</h4><div className="table-wrap"><table><thead><tr><th>Group/resource</th><th>Objects</th><th>Current</th><th>History</th></tr></thead>
-          <tbody>{resources.map((item) => <tr key={`${item.apiGroup}/${item.resource}`}><td>{item.apiGroup || 'core'}/{item.resource}</td><td>{item.currentObjects}</td><td>{formatBytes(item.currentBytes)}</td><td>{formatBytes(item.historicalBytes)}</td></tr>)}</tbody>
+        <div><h4>{t('kubernetes.topResources')}</h4><div className="table-wrap"><table><thead><tr><th>{t('kubernetes.groupResource')}</th><th>{t('kubernetes.objects')}</th><th>{t('kubernetes.current')}</th><th>{t('kubernetes.history')}</th></tr></thead>
+          <tbody>{resources.map((item) => <tr key={`${item.apiGroup}/${item.resource}`}><td>{item.apiGroup || t('value.core')}/{item.resource}</td><td>{item.currentObjects}</td><td>{formatBytes(item.currentBytes)}</td><td>{formatBytes(item.historicalBytes)}</td></tr>)}</tbody>
         </table></div></div>
-        <div><h4>Top namespaces</h4><div className="table-wrap"><table><thead><tr><th>Namespace</th><th>Objects</th><th>Current</th><th>History</th></tr></thead>
-          <tbody>{namespaces.map((item) => <tr key={item.namespace || 'cluster-scoped'}><td>{item.namespace || '(cluster-scoped)'}</td><td>{item.currentObjects}</td><td>{formatBytes(item.currentBytes)}</td><td>{formatBytes(item.historicalBytes)}</td></tr>)}</tbody>
+        <div><h4>{t('kubernetes.topNamespaces')}</h4><div className="table-wrap"><table><thead><tr><th>{t('kubernetes.namespace')}</th><th>{t('kubernetes.objects')}</th><th>{t('kubernetes.current')}</th><th>{t('kubernetes.history')}</th></tr></thead>
+          <tbody>{namespaces.map((item) => <tr key={item.namespace || 'cluster-scoped'}><td>{item.namespace || t('value.clusterScoped')}</td><td>{item.currentObjects}</td><td>{formatBytes(item.currentBytes)}</td><td>{formatBytes(item.historicalBytes)}</td></tr>)}</tbody>
         </table></div></div>
       </div>
 
-      <div className="section-title"><h4>Objects</h4><button type="button" onClick={() => { setFilters(initialObjectFilters); setPage(1); }}>Reset filters</button></div>
+      <div className="section-title"><h4>{t('kubernetes.objectList')}</h4><button type="button" onClick={() => { setFilters(initialObjectFilters); setPage(1); }}>{t('semantic.resetFilters')}</button></div>
       <div className="filters object-filters">
-        <label>API group<input value={filters.group} onChange={(event) => { setFilters({ ...filters, group: event.target.value }); setPage(1); }} placeholder="apps" /></label>
-        <label>Resource<input value={filters.resource} onChange={(event) => { setFilters({ ...filters, resource: event.target.value }); setPage(1); }} placeholder="deployments" /></label>
-        <label>Namespace<input value={filters.namespace} onChange={(event) => { setFilters({ ...filters, namespace: event.target.value }); setPage(1); }} /></label>
-        <label>Minimum bytes<input type="number" min="0" value={filters.minSize} onChange={(event) => { setFilters({ ...filters, minSize: event.target.value }); setPage(1); }} /></label>
-        <label>Minimum revisions<input type="number" min="0" value={filters.minRevisions} onChange={(event) => { setFilters({ ...filters, minRevisions: event.target.value }); setPage(1); }} /></label>
-        <label>Decode status<select value={filters.decodeStatus} onChange={(event) => { setFilters({ ...filters, decodeStatus: event.target.value }); setPage(1); }}><option value="">All</option><option value="decoded_json">JSON</option><option value="decoded_protobuf">Protobuf</option><option value="encrypted">Encrypted</option><option value="protobuf_unsupported">Unsupported Protobuf</option><option value="decode_failed">Decode failed</option><option value="format_unknown">Unknown format</option><option value="path_unknown">Unknown path</option></select></label>
-        <label>Field<select value={filters.field} onChange={(event) => { setFilters({ ...filters, field: event.target.value }); setPage(1); }}><option value="">All</option><option value="spec">spec</option><option value="status">status</option><option value="managedFields">managedFields</option><option value="annotations">annotations</option><option value="labels">labels</option><option value="data">data</option><option value="binaryData">binaryData</option></select></label>
-        <label>Sort<select value={filters.sort} onChange={(event) => { setFilters({ ...filters, sort: event.target.value as ObjectFilters['sort'] }); setPage(1); }}><option value="historical_bytes">Historical bytes</option><option value="current_bytes">Current bytes</option><option value="revision_count">Revisions</option><option value="largest_field">Largest field</option><option value="name">Name</option></select></label>
+        <label>{t('kubernetes.apiGroup')}<input value={filters.group} onChange={(event) => { setFilters({ ...filters, group: event.target.value }); setPage(1); }} placeholder="apps" /></label>
+        <label>{t('kubernetes.resource')}<input value={filters.resource} onChange={(event) => { setFilters({ ...filters, resource: event.target.value }); setPage(1); }} placeholder="deployments" /></label>
+        <label>{t('kubernetes.namespace')}<input value={filters.namespace} onChange={(event) => { setFilters({ ...filters, namespace: event.target.value }); setPage(1); }} /></label>
+        <label>{t('kubernetes.minimumBytes')}<input type="number" min="0" value={filters.minSize} onChange={(event) => { setFilters({ ...filters, minSize: event.target.value }); setPage(1); }} /></label>
+        <label>{t('kubernetes.minimumRevisions')}<input type="number" min="0" value={filters.minRevisions} onChange={(event) => { setFilters({ ...filters, minRevisions: event.target.value }); setPage(1); }} /></label>
+        <label>{t('kubernetes.decodeStatus')}<select value={filters.decodeStatus} onChange={(event) => { setFilters({ ...filters, decodeStatus: event.target.value }); setPage(1); }}><option value="">{t('physical.all')}</option><option value="decoded_json">{t('decode.decoded_json')}</option><option value="decoded_protobuf">{t('decode.decoded_protobuf')}</option><option value="encrypted">{t('decode.encrypted')}</option><option value="protobuf_unsupported">{t('decode.protobuf_unsupported')}</option><option value="decode_failed">{t('decode.decode_failed')}</option><option value="format_unknown">{t('decode.format_unknown')}</option><option value="path_unknown">{t('decode.path_unknown')}</option></select></label>
+        <label>{t('kubernetes.field')}<select value={filters.field} onChange={(event) => { setFilters({ ...filters, field: event.target.value }); setPage(1); }}><option value="">{t('physical.all')}</option><option value="spec">spec</option><option value="status">status</option><option value="managedFields">managedFields</option><option value="annotations">annotations</option><option value="labels">labels</option><option value="data">data</option><option value="binaryData">binaryData</option></select></label>
+        <label>{t('kubernetes.sort')}<select value={filters.sort} onChange={(event) => { setFilters({ ...filters, sort: event.target.value as ObjectFilters['sort'] }); setPage(1); }}><option value="historical_bytes">{t('kubernetes.sortHistory')}</option><option value="current_bytes">{t('kubernetes.sortCurrent')}</option><option value="revision_count">{t('kubernetes.sortRevisions')}</option><option value="largest_field">{t('kubernetes.sortLargestField')}</option><option value="name">{t('kubernetes.sortName')}</option></select></label>
       </div>
-      <div className="table-wrap"><table><thead><tr><th>Group/resource</th><th>Namespace</th><th>Name</th><th>Status</th><th>Current</th><th>History</th><th>Revisions</th><th>Largest field</th><th></th></tr></thead>
-        <tbody>{objects?.items.map((item) => <tr key={item.id}><td>{item.identity.apiGroup || 'core'}/{item.identity.resource}</td><td>{item.identity.namespace || '(cluster-scoped)'}</td><td>{item.identity.displayName}</td><td>{item.decodeStatus}</td><td>{formatBytes(item.currentBytes)}</td><td>{formatBytes(item.historicalBytes)}</td><td>{item.revisionCount}</td><td>{item.largestFieldPath || '—'} {item.largestFieldBytes ? `(${formatBytes(item.largestFieldBytes)})` : ''}</td><td><button type="button" onClick={() => void inspect(item)}>Inspect</button></td></tr>)}</tbody>
+      <div className="table-wrap"><table><thead><tr><th>{t('kubernetes.groupResource')}</th><th>{t('kubernetes.namespace')}</th><th>{t('kubernetes.name')}</th><th>{t('kubernetes.status')}</th><th>{t('kubernetes.current')}</th><th>{t('kubernetes.history')}</th><th>{t('kubernetes.revisions')}</th><th>{t('kubernetes.largestField')}</th><th></th></tr></thead>
+        <tbody>{objects?.items.map((item) => <tr key={item.id}><td>{item.identity.apiGroup || t('value.core')}/{item.identity.resource}</td><td>{item.identity.namespace || t('value.clusterScoped')}</td><td>{item.identity.displayName}</td><td>{decodeStatusLabel(item.decodeStatus, t)}</td><td>{formatBytes(item.currentBytes)}</td><td>{formatBytes(item.historicalBytes)}</td><td>{item.revisionCount}</td><td>{item.largestFieldPath || '—'} {item.largestFieldBytes ? `(${formatBytes(item.largestFieldBytes)})` : ''}</td><td><button type="button" onClick={() => void inspect(item)}>{t('kubernetes.inspect')}</button></td></tr>)}</tbody>
       </table></div>
-      <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button><span>Page {page} · {objects?.total ?? 0} objects</span><button disabled={!objects || page * objects.pageSize >= objects.total} onClick={() => setPage((value) => value + 1)}>Next</button></div>
+      <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t('pagination.previous')}</button><span>{t('pagination.objects', { page, count: objects?.total ?? 0 })}</span><button disabled={!objects || page * objects.pageSize >= objects.total} onClick={() => setPage((value) => value + 1)}>{t('pagination.next')}</button></div>
 
-      {selectedObject && <div className="drawer" role="region" aria-label="Kubernetes object details">
-        <div className="section-title"><h4>{selectedObject.identity.displayName}</h4><button type="button" onClick={() => { setSelectedObject(null); setRevisions(null); }}>Close</button></div>
-        <p>{selectedObject.identity.apiGroup || 'core'}/{selectedObject.identity.resource} · {selectedObject.identity.namespace || '(cluster-scoped)'} · {selectedObject.decodeStatus}</p>
-        <p className="hash">Key hash: {selectedObject.keyHash}</p>
-        <h4>Selected field sizes</h4>
-        <div className="table-wrap"><table><thead><tr><th>Revision</th><th>Path</th><th>Bytes</th><th>Type</th><th>Hash</th></tr></thead><tbody>
+      {selectedObject && <div className="drawer" role="region" aria-label={t('kubernetes.objectDetails')}>
+        <div className="section-title"><h4>{selectedObject.identity.displayName}</h4><button type="button" onClick={() => { setSelectedObject(null); setRevisions(null); }}>{t('actions.close')}</button></div>
+        <p>{selectedObject.identity.apiGroup || t('value.core')}/{selectedObject.identity.resource} · {selectedObject.identity.namespace || t('value.clusterScoped')} · {decodeStatusLabel(selectedObject.decodeStatus, t)}</p>
+        <p className="hash">{t('semantic.keyHash', { hash: selectedObject.keyHash })}</p>
+        <h4>{t('kubernetes.selectedFields')}</h4>
+        <div className="table-wrap"><table><thead><tr><th>{t('kubernetes.revision')}</th><th>{t('kubernetes.path')}</th><th>{t('kubernetes.bytes')}</th><th>{t('kubernetes.type')}</th><th>{t('kubernetes.hash')}</th></tr></thead><tbody>
           {revisions?.items.flatMap((revision) => revision.fields.map((field) => <tr key={`${revision.mainRevision}-${revision.subRevision}-${field.path}`}><td>{revision.mainRevision}.{revision.subRevision}</td><td>{field.path}</td><td>{formatBytes(field.byteSize)}</td><td>{field.typeClass}</td><td><code>{field.hash.slice(0, 16)}</code></td></tr>))}
         </tbody></table></div>
-        <h4>Adjacent revision changes</h4>
-        <div className="table-wrap"><table><thead><tr><th>Revisions</th><th>Changed paths</th><th>Byte delta</th><th>Classification</th></tr></thead><tbody>
-          {revisions?.diffs.map((diff) => <tr key={`${diff.previousMainRevision}-${diff.currentMainRevision}`}><td>{diff.previousMainRevision} → {diff.currentMainRevision}</td><td>{[...diff.addedPaths, ...diff.removedPaths, ...diff.modifiedPaths].join(', ') || 'none'}</td><td>{diff.byteDelta}</td><td>{diff.timestampOnly ? 'timestamps only' : diff.statusOnly ? 'status only' : diff.managedFieldsOnly ? 'managed fields only' : 'structural'}</td></tr>)}
+        <h4>{t('kubernetes.adjacentChanges')}</h4>
+        <div className="table-wrap"><table><thead><tr><th>{t('kubernetes.revisions')}</th><th>{t('kubernetes.changedPaths')}</th><th>{t('kubernetes.byteDelta')}</th><th>{t('kubernetes.classification')}</th></tr></thead><tbody>
+          {revisions?.diffs.map((diff) => <tr key={`${diff.previousMainRevision}-${diff.currentMainRevision}`}><td>{diff.previousMainRevision} → {diff.currentMainRevision}</td><td>{[...diff.addedPaths, ...diff.removedPaths, ...diff.modifiedPaths].join(', ') || t('value.none')}</td><td>{diff.byteDelta}</td><td>{diff.timestampOnly ? t('kubernetes.timestampsOnly') : diff.statusOnly ? t('kubernetes.statusOnly') : diff.managedFieldsOnly ? t('kubernetes.managedFieldsOnly') : t('kubernetes.structural')}</td></tr>)}
         </tbody></table></div>
       </div>}
     </>}
   </div>;
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
+function Metric({ metricKey, value }: { metricKey: MetricKey; value: string }) {
+  const { locale } = useTranslation();
+  const copy = metric(locale, metricKey);
+  return <div className="metric"><span className="metric-label">{copy.label}<span className="metric-help" role="img" aria-label={copy.help} title={copy.help} tabIndex={0}>?</span></span><strong>{value}</strong></div>;
 }
 
-function versionEvidence(task: Task): string {
+function versionEvidence(task: Task, t: Translate): string {
   if (task.etcdVersionSource === 'database_metadata') {
-    return `DB metadata: ${task.etcdVersion} (patch unknown)`;
+    return t('version.database', { version: task.etcdVersion ?? t('value.unavailable') });
   }
   if (task.etcdVersionSource === 'manual') {
-    const version = task.etcdVersion ?? 'unknown';
+    const version = task.etcdVersion ?? t('value.unavailable');
     const detected = task.detectedEtcdVersion;
     if (detected && !version.replace(/^v/, '').startsWith(`${detected}.`)) {
-      return `Manual: ${version} · DB detected: ${detected}`;
+      return t('version.manualDetected', { manual: version, detected });
     }
-    return task.etcdVersionExact ? `Manual: ${version}` : `Manual: ${version} (unconfirmed)`;
+    return task.etcdVersionExact ? t('version.manual', { version }) : t('version.manualUnconfirmed', { version });
   }
-  return task.etcdVersion ? `Version: ${task.etcdVersion} (source unknown)` : 'Version: Unknown';
+  return task.etcdVersion ? t('version.unknownSource', { version: task.etcdVersion }) : t('version.unknown');
 }

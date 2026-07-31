@@ -30,8 +30,8 @@ func Load(path string) (Config, error) {
 	var c Config
 	c.Server.Listen = "127.0.0.1:8080"
 	c.Server.DataDir = "./analysis-data"
-	c.Analysis.ChannelSize = 256
-	c.Analysis.WorkerCount = runtime.NumCPU()
+	c.Analysis.ChannelSize = 128
+	c.Analysis.WorkerCount = defaultWorkerCount(runtime.NumCPU())
 	c.Analysis.SQLiteBatchSize = 1000
 	c.Security.MaxInputBytes = 50 << 30
 	if path == "" {
@@ -46,4 +46,14 @@ func Load(path string) (Config, error) {
 		return c, fmt.Errorf("decode config: %w", err)
 	}
 	return c, nil
+}
+
+func defaultWorkerCount(cpus int) int {
+	if cpus < 1 {
+		return 1
+	}
+	if cpus > 4 {
+		return 4
+	}
+	return cpus
 }
