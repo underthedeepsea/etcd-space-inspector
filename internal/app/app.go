@@ -199,7 +199,8 @@ func (a *Application) Get(ctx context.Context, id string) (task.Task, error) {
 
 // Start begins analysis in the background.
 func (a *Application) Start(ctx context.Context, id string) error {
-	if _, err := a.Get(ctx, id); err != nil {
+	item, err := a.Get(ctx, id)
+	if err != nil {
 		return err
 	}
 	db, err := storage.Open(a.databasePath(id))
@@ -207,7 +208,7 @@ func (a *Application) Start(ctx context.Context, id string) error {
 		return err
 	}
 	repository := &repository{database: storage.NewRepository(db), manifests: a.manifests}
-	runner := task.NewRunner(repository, a.stages)
+	runner := task.NewRunner(repository, a.stagesFor(item))
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	a.mu.Lock()
@@ -229,6 +230,13 @@ func (a *Application) Start(ctx context.Context, id string) error {
 		close(done)
 	}()
 	return nil
+}
+
+func (a *Application) stagesFor(item task.Task) []task.Stage {
+	if item.InputType == "log" {
+		return []task.Stage{LogStage(a.manifests, a.diffBatchSize)}
+	}
+	return a.stages
 }
 
 // Cancel signals a running task.
