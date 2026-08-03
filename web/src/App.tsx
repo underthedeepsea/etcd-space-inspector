@@ -15,6 +15,7 @@ import {
   DiffSummary,
   getComparison,
   getDiffOverview,
+  getTimeline,
   getKubernetesObject,
   getKubernetesSummary,
   getMVCCSummary,
@@ -22,6 +23,8 @@ import {
   KeyFilters,
   KeyRecord,
   KeyResult,
+  LogEvent,
+  LogTimeline,
   listBuckets,
   listComparisons,
   listDiffKeys,
@@ -107,7 +110,7 @@ function statusLabel(status: string, t: Translate): string {
 }
 
 function inputTypeLabel(inputType: string, t: Translate): string {
-  const keys: Record<string, TextKey> = { snapshot: 'type.snapshot', 'raw-db': 'type.raw-db' };
+  const keys: Record<string, TextKey> = { snapshot: 'type.snapshot', 'raw-db': 'type.raw-db', log: 'type.log' };
   return t(keys[inputType] ?? 'value.unavailable');
 }
 
@@ -141,7 +144,7 @@ export default function App() {
   const [comparisons, setComparisons] = useState<Comparison[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const [selectedTask, setSelectedTask] = useState<string | null>(null);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [baselineTask, setBaselineTask] = useState<string | null>(null);
 	const [comparisonTarget, setComparisonTarget] = useState<Task | null>(null);
   const [selectedDiff, setSelectedDiff] = useState<string | null>(null);
@@ -180,7 +183,7 @@ export default function App() {
       await createTask({
         name: String(form.get('name') ?? ''),
         inputPath: String(form.get('inputPath') ?? ''),
-        inputType: String(form.get('inputType') ?? 'snapshot') as 'snapshot' | 'raw-db',
+        inputType: String(form.get('inputType') ?? 'snapshot') as 'snapshot' | 'raw-db' | 'log',
         etcdVersion: String(form.get('etcdVersion') ?? ''),
       });
       event.currentTarget.reset();
@@ -256,7 +259,7 @@ export default function App() {
         <form onSubmit={submit} className="task-form">
           <label>{t('form.name')}<input name="name" required /></label>
           <label>{t('form.inputPath')}<input name="inputPath" required placeholder={'C:\\data\\snapshot.db or /data/snapshot.db'} /></label>
-          <label>{t('form.inputType')}<select name="inputType"><option value="snapshot">{t('form.snapshot')}</option><option value="raw-db">{t('form.rawDb')}</option></select></label>
+          <label>{t('form.inputType')}<select name="inputType"><option value="snapshot">{t('form.snapshot')}</option><option value="raw-db">{t('form.rawDb')}</option><option value="log">{t('form.log')}</option></select><small>{t('form.logHint')}</small></label>
           <label>{t('form.versionOverride')}<input name="etcdVersion" placeholder="3.4.13" /></label>
           <button type="submit" disabled={busy}>{t('form.createTask')}</button>
         </form>
@@ -277,9 +280,9 @@ export default function App() {
                   <td><progress max="1" value={task.progress}>{Math.round(task.progress * 100)}%</progress></td>
                   <td>{formatDate(task.createdAt, locale)}</td>
                   <td className="actions">
-                    {task.status === 'completed' && <button onClick={() => setSelectedTask(task.taskId)}>{t('tasks.inspect')}</button>}
-                    {task.status === 'completed' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? configureComparison(task) : setBaselineTask(task.taskId)}>{baselineTask ? t('tasks.compare') : t('tasks.setBaseline')}</button>}
-                    {task.status === 'completed' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>{t('tasks.baseline')}</button>}
+                    {task.status === 'completed' && <button onClick={() => setSelectedTask(task)}>{t('tasks.inspect')}</button>}
+                    {task.status === 'completed' && task.inputType !== 'log' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? configureComparison(task) : setBaselineTask(task.taskId)}>{baselineTask ? t('tasks.compare') : t('tasks.setBaseline')}</button>}
+                    {task.status === 'completed' && task.inputType !== 'log' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>{t('tasks.baseline')}</button>}
                     {task.status === 'pending' && <button disabled={busy} onClick={() => void action(() => startTask(task.taskId), t('tasks.started'))}>{t('tasks.start')}</button>}
                     {task.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelTask(task.taskId), t('tasks.cancelled'))}>{t('tasks.cancel')}</button>}
                     {task.status !== 'running' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteTask(task.taskId), t('tasks.deleted'))}>{t('tasks.delete')}</button>}
@@ -308,7 +311,9 @@ export default function App() {
           {comparisons.length === 0 && <tr><td colSpan={5} className="empty">{t('comparisons.empty')}</td></tr>}
         </tbody></table></div>
       </section>
-      {selectedTask && <PhysicalAnalysis taskId={selectedTask} onClose={() => setSelectedTask(null)} />}
+      {selectedTask && (selectedTask.inputType === 'log'
+        ? <LogTimelineAnalysis task={selectedTask} onClose={() => setSelectedTask(null)} />
+        : <PhysicalAnalysis taskId={selectedTask.taskId} onClose={() => setSelectedTask(null)} />)}
       {selectedDiff && <DiffAnalysis diffId={selectedDiff} onClose={() => setSelectedDiff(null)} />}
     </main>
     </TranslationContext.Provider>
@@ -420,6 +425,89 @@ function DiffKeyTable({ title, result }: { title: string; result: DiffKeyResult 
   return <div><h3>{title}</h3><div className="table-wrap"><table><thead><tr><th>{t('comparison.key')}</th><th>{t('comparison.change')}</th><th>{t('comparison.current')}</th><th>{t('comparison.history')}</th><th>{t('comparison.total')}</th></tr></thead><tbody>
     {result?.items.map((item) => <tr key={item.keyHash}><td><code>{item.key}</code></td><td>{changeTypeLabel(item.changeType, t)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td><td>{formatSignedBytes(item.totalBytesDelta)}</td></tr>)}
   </tbody></table></div></div>;
+}
+
+const logEventTypes = [
+  'nospace', 'quota_exceeded', 'compaction', 'defrag', 'slow_apply',
+  'slow_backend_commit', 'slow_fdatasync', 'wal_fsync', 'leader_change',
+  'request_timeout', 'snapshot_save', 'snapshot_restore', 'lease_revoke',
+  'corruption_check', 'large_request', 'backend_commit', 'unknown',
+];
+const logSources = ['unknown', 'etcdserver', 'mvcc', 'backend', 'wal', 'raft', 'lease'];
+
+type LogFilters = { from: string; to: string; eventType: string; severity: string; source: string };
+const initialLogFilters: LogFilters = { from: '', to: '', eventType: '', severity: '', source: '' };
+
+function logTime(value: string | undefined, locale: Locale, t: Translate): string {
+  return value ? formatDate(value, locale) : t('log.unknownTime');
+}
+
+function logValue(value: number | undefined): string {
+  return value === undefined ? '—' : String(value);
+}
+
+function LogTimelineAnalysis({ task, onClose }: { task: Task; onClose: () => void }) {
+  const { locale, t } = useTranslation();
+  const [timeline, setTimeline] = useState<LogTimeline | null>(null);
+  const [filters, setFilters] = useState<LogFilters>(initialLogFilters);
+  const [page, setPage] = useState(1);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    const query = {
+      ...(filters.from ? { from: new Date(filters.from).toISOString() } : {}),
+      ...(filters.to ? { to: new Date(filters.to).toISOString() } : {}),
+      ...(filters.eventType ? { eventType: filters.eventType } : {}),
+      ...(filters.severity ? { severity: filters.severity } : {}),
+      ...(filters.source ? { source: filters.source } : {}),
+      page,
+      pageSize: 20,
+    };
+    getTimeline(task.taskId, query)
+      .then((nextTimeline) => {
+        if (!active) return;
+        setTimeline(nextTimeline);
+        setError('');
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error ? reason.message : t('log.loadFailed'));
+      });
+    return () => { active = false; };
+  }, [task.taskId, filters, page, t]);
+
+  function updateFilter(name: keyof LogFilters, value: string) {
+    setFilters((current) => ({ ...current, [name]: value }));
+    setPage(1);
+  }
+
+  return <section className="panel analysis log-timeline" aria-labelledby="log-heading">
+    <div className="section-title"><h2 id="log-heading">{t('log.title')}</h2><button onClick={onClose}>{t('actions.close')}</button></div>
+    <p><strong>{task.name}</strong> · {inputTypeLabel(task.inputType, t)} · {formatBytes(task.inputSize)}</p>
+    {error && <p role="alert">{error}</p>}
+    {timeline && <>
+      <div className="metrics">
+        <Metric metricKey="log.totalLines" value={String(timeline.summary.totalLines)} />
+        <Metric metricKey="log.recognizedEvents" value={String(timeline.summary.recognizedEvents)} />
+        <Metric metricKey="log.unknownLines" value={String(timeline.summary.unknownLines)} />
+        <Metric metricKey="log.parseErrors" value={String(timeline.summary.parseErrors)} />
+      </div>
+      <p className="log-range">{t('log.inputSummary')}: {t('log.firstObservedAt')} {logTime(timeline.summary.firstObservedAt, locale, t)} · {t('log.lastObservedAt')} {logTime(timeline.summary.lastObservedAt, locale, t)}</p>
+      <p className="notice">{t('log.safetyBoundary')} {t('log.noAttribution')}</p>
+      <div className="filters log-filters">
+        <label>{t('log.from')}<input type="datetime-local" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} /></label>
+        <label>{t('log.to')}<input type="datetime-local" value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} /></label>
+        <label>{t('log.eventType')}<select value={filters.eventType} onChange={(event) => updateFilter('eventType', event.target.value)}><option value="">{t('log.allEvents')}</option>{logEventTypes.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label>{t('log.severity')}<select value={filters.severity} onChange={(event) => updateFilter('severity', event.target.value)}><option value="">{t('log.allSeverities')}</option><option value="ERROR">ERROR</option><option value="WARN">WARN</option><option value="INFO">INFO</option><option value="UNKNOWN">UNKNOWN</option></select></label>
+        <label>{t('log.source')}<select value={filters.source} onChange={(event) => updateFilter('source', event.target.value)}><option value="">{t('log.allSources')}</option>{logSources.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+      </div>
+      <div className="table-wrap"><table><thead><tr><th>{t('log.time')}</th><th>{t('log.event')}</th><th>{t('log.severity')}</th><th>{t('log.source')}</th><th>{t('log.line')}</th><th>{t('log.duration')}</th><th>{t('log.revision')}</th><th>{t('log.dbSize')}</th><th>{t('log.parseStatus')}</th><th>{t('log.fingerprint')}</th></tr></thead><tbody>
+        {timeline.items.map((event: LogEvent) => <tr key={event.eventId}><td>{logTime(event.observedAt, locale, t)}</td><td><code>{event.eventType}</code></td><td><span className={`badge ${event.severity.toLowerCase()}`}>{event.severity}</span></td><td>{event.source}</td><td>{event.lineNumber}</td><td>{logValue(event.durationMs)}</td><td>{logValue(event.revision)}</td><td>{event.dbSizeBytes === undefined ? '—' : formatBytes(event.dbSizeBytes)}</td><td>{event.parseStatus}</td><td><code>{event.messageFingerprint.slice(0, 12)}</code></td></tr>)}
+        {timeline.items.length === 0 && <tr><td colSpan={10} className="empty">{t('log.empty')}</td></tr>}
+      </tbody></table></div>
+      <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t('log.previous')}</button><span>{t('pagination.records', { page, count: timeline.total })}</span><button disabled={page * timeline.pageSize >= timeline.total} onClick={() => setPage((value) => value + 1)}>{t('log.next')}</button></div>
+    </>}
+  </section>;
 }
 
 function PhysicalAnalysis({ taskId, onClose }: { taskId: string; onClose: () => void }) {

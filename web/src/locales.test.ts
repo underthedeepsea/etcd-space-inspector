@@ -34,3 +34,46 @@ for (const key of churnKeys) {
     assert.ok(text(locale, key).length > 0);
   }
 }
+
+const logKeys: TextKey[] = [
+  'form.log',
+  'form.logHint',
+  'type.log',
+  'log.title',
+  'log.inputSummary',
+  'log.totalLines',
+  'log.recognizedEvents',
+  'log.unknownLines',
+  'log.parseErrors',
+  'log.firstObservedAt',
+  'log.lastObservedAt',
+  'log.from',
+  'log.to',
+  'log.eventType',
+  'log.severity',
+  'log.source',
+  'log.allEvents',
+  'log.allSeverities',
+  'log.allSources',
+  'log.event',
+  'log.time',
+  'log.line',
+  'log.duration',
+  'log.revision',
+  'log.dbSize',
+  'log.parseStatus',
+  'log.fingerprint',
+  'log.unknownTime',
+  'log.empty',
+  'log.loadFailed',
+  'log.safetyBoundary',
+  'log.noAttribution',
+  'log.previous',
+  'log.next',
+];
+
+for (const key of logKeys) {
+  for (const locale of ['zh', 'en'] as const) {
+    assert.ok(text(locale, key).length > 0);
+  }
+}

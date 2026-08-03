@@ -22,8 +22,37 @@ export interface Task {
 export interface CreateTask {
   name: string;
   inputPath: string;
-  inputType: 'snapshot' | 'raw-db';
+  inputType: 'snapshot' | 'raw-db' | 'log';
   etcdVersion: string;
+}
+
+export interface LogEvent {
+  eventId: number;
+  lineNumber: number;
+  observedAt?: string;
+  eventType: string;
+  severity: 'INFO' | 'WARN' | 'ERROR' | 'UNKNOWN';
+  source: string;
+  durationMs?: number;
+  revision?: number;
+  dbSizeBytes?: number;
+  parseStatus: string;
+  messageFingerprint: string;
+}
+
+export interface LogTimeline {
+  summary: {
+    totalLines: number;
+    recognizedEvents: number;
+    unknownLines: number;
+    parseErrors: number;
+    firstObservedAt?: string;
+    lastObservedAt?: string;
+  };
+  items: LogEvent[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 export interface SpaceSummary {
@@ -384,6 +413,23 @@ export function deleteTask(id: string): Promise<void> {
 
 export function getOverview(id: string): Promise<SpaceSummary> {
   return request(`/api/v1/tasks/${encodeURIComponent(id)}/overview`);
+}
+
+export function getTimeline(id: string, query: {
+  from?: string;
+  to?: string;
+  eventType?: string;
+  severity?: string;
+  source?: string;
+  page?: number;
+  pageSize?: number;
+} = {}): Promise<LogTimeline> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== '') params.set(key, String(value));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return request(`/api/v1/tasks/${encodeURIComponent(id)}/timeline${suffix}`);
 }
 
 export function listPages(id: string, page: number, pageType: string): Promise<PageResult> {
