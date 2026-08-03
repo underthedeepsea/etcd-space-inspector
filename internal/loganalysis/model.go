@@ -71,26 +71,27 @@ func IsSeverity(value string) bool {
 
 // Event is one normalized log line. It intentionally has no raw message field.
 type Event struct {
-	LineNumber         int64
-	ObservedAt         *time.Time
-	Type               EventType
-	Severity           Severity
-	Source             string
-	DurationMS         *int64
-	Revision           *int64
-	DBSizeBytes        *int64
-	ParseStatus        string
-	MessageFingerprint string
+	EventID            int64      `json:"eventId"`
+	LineNumber         int64      `json:"lineNumber"`
+	ObservedAt         *time.Time `json:"observedAt,omitempty"`
+	Type               EventType  `json:"eventType"`
+	Severity           Severity   `json:"severity"`
+	Source             string     `json:"source"`
+	DurationMS         *int64     `json:"durationMs,omitempty"`
+	Revision           *int64     `json:"revision,omitempty"`
+	DBSizeBytes        *int64     `json:"dbSizeBytes,omitempty"`
+	ParseStatus        string     `json:"parseStatus"`
+	MessageFingerprint string     `json:"messageFingerprint"`
 }
 
 // Summary is the aggregate result of one log scan.
 type Summary struct {
-	TotalLines       int64
-	RecognizedEvents int64
-	UnknownLines     int64
-	ParseErrors      int64
-	FirstObservedAt  *time.Time
-	LastObservedAt   *time.Time
+	TotalLines       int64      `json:"totalLines"`
+	RecognizedEvents int64      `json:"recognizedEvents"`
+	UnknownLines     int64      `json:"unknownLines"`
+	ParseErrors      int64      `json:"parseErrors"`
+	FirstObservedAt  *time.Time `json:"firstObservedAt,omitempty"`
+	LastObservedAt   *time.Time `json:"lastObservedAt,omitempty"`
 }
 
 // EventSink receives one event at a time and may stop parsing with an error.
