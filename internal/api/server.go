@@ -11,10 +11,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"etcd-analyzer/internal/apperr"
 	backend "etcd-analyzer/internal/backend/bbolt"
 	domain "etcd-analyzer/internal/diff"
+	"etcd-analyzer/internal/loganalysis"
 	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
@@ -63,6 +65,11 @@ type DiffService interface {
 	DiffNamespaces(context.Context, string, storage.DiffDeltaQuery) ([]domain.NamespaceDelta, error)
 }
 
+// LogService is the structured log timeline query boundary.
+type LogService interface {
+	Timeline(context.Context, string, storage.LogQuery) (storage.TimelineResult, error)
+}
+
 // Dependencies configure the API handler.
 type Dependencies struct {
 	Version       string
@@ -71,6 +78,7 @@ type Dependencies struct {
 	MVCC          MVCCService
 	Kubernetes    KubernetesService
 	Diffs         DiffService
+	Logs          LogService
 	MaxInputBytes int64
 	UI            http.Handler
 }
@@ -186,6 +194,14 @@ func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, r
 		return
 	}
 	if len(parts) == 2 {
+		if parts[1] == "timeline" {
+			if request.Method != http.MethodGet {
+				methodNotAllowed(writer)
+				return
+			}
+			s.handleTimeline(writer, request, id)
+			return
+		}
 		if request.Method == http.MethodGet {
 			s.handleAnalysis(writer, request, id, parts[1])
 			return
@@ -229,6 +245,91 @@ func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, r
 	default:
 		methodNotAllowed(writer)
 	}
+}
+
+func (s *server) handleTimeline(writer http.ResponseWriter, request *http.Request, taskID string) {
+	if s.dependencies.Logs == nil {
+		writeError(writer, http.StatusNotFound, "NOT_FOUND", "log timeline resource not found")
+		return
+	}
+	query, page, pageSize, err := parseLogQuery(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid log timeline query")
+		return
+	}
+	result, err := s.dependencies.Logs.Timeline(request.Context(), taskID, query)
+	if err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	if result.Items == nil {
+		result.Items = []loganalysis.Event{}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"summary": result.Summary, "items": result.Items, "total": result.Total,
+		"page": page, "pageSize": pageSize,
+	})
+}
+
+func parseLogQuery(request *http.Request) (storage.LogQuery, int, int, error) {
+	values := request.URL.Query()
+	page, pageSize, err := pagination(request, 100)
+	if err != nil {
+		return storage.LogQuery{}, 0, 0, err
+	}
+	from, err := parseLogTime(values.Get("from"))
+	if err != nil {
+		return storage.LogQuery{}, 0, 0, err
+	}
+	to, err := parseLogTime(values.Get("to"))
+	if err != nil {
+		return storage.LogQuery{}, 0, 0, err
+	}
+	if from != nil && to != nil && from.After(*to) {
+		return storage.LogQuery{}, 0, 0, fmt.Errorf("from must not be after to")
+	}
+	eventType := values.Get("eventType")
+	if eventType != "" && !loganalysis.IsEventType(eventType) {
+		return storage.LogQuery{}, 0, 0, fmt.Errorf("invalid event type")
+	}
+	severity := values.Get("severity")
+	if severity != "" && !loganalysis.IsSeverity(severity) {
+		return storage.LogQuery{}, 0, 0, fmt.Errorf("invalid severity")
+	}
+	source := values.Get("source")
+	if source != "" && !validLogSource(source) {
+		return storage.LogQuery{}, 0, 0, fmt.Errorf("invalid source")
+	}
+	return storage.LogQuery{
+		From: from, To: to, EventType: eventType, Severity: severity, Source: source,
+		Limit: pageSize, Offset: (page - 1) * pageSize,
+	}, page, pageSize, nil
+}
+
+func parseLogTime(value string) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil, err
+	}
+	utc := parsed.UTC()
+	return &utc, nil
+}
+
+func validLogSource(value string) bool {
+	if len(value) > 64 {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '-' || char == '_' || char == '.' || char == ':' || char == '/' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (s *server) handleMVCC(writer http.ResponseWriter, request *http.Request, taskID string, parts []string) bool {

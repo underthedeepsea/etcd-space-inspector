@@ -2,8 +2,8 @@ package app
 
 import (
 	"context"
-	"fmt"
 
+	"etcd-analyzer/internal/apperr"
 	"etcd-analyzer/internal/storage"
 )
 
@@ -14,7 +14,7 @@ func (a *Application) Timeline(ctx context.Context, id string, query storage.Log
 		return storage.TimelineResult{}, err
 	}
 	if item.InputType != "log" {
-		return storage.TimelineResult{}, fmt.Errorf("log timeline is unsupported for input type %q", item.InputType)
+		return storage.TimelineResult{}, apperr.E("LOG_TIMELINE_UNSUPPORTED", "log timeline is unsupported for this input type", nil)
 	}
 	db, err := storage.OpenReadOnly(a.databasePath(id))
 	if err != nil {
