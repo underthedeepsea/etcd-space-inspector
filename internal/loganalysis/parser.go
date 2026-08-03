@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -86,6 +87,11 @@ func parseReader(ctx context.Context, reader io.Reader, sink EventSink) (Summary
 				break
 			}
 		}
+		terminalReadError := readErr != nil && readErr != io.EOF
+		if len(line) == 0 && terminalReadError {
+			summary.ParseErrors++
+			break
+		}
 		if len(line) == 0 && readErr == io.EOF {
 			break
 		}
@@ -100,6 +106,9 @@ func parseReader(ctx context.Context, reader io.Reader, sink EventSink) (Summary
 			}
 		} else {
 			event, recognized, parseError := parseLine(lineNumber, line)
+			if !utf8.Valid(line) {
+				event, recognized, parseError = unknownEvent(lineNumber, "encoding_error", string(line)), false, true
+			}
 			if parseError {
 				summary.ParseErrors++
 			}
@@ -112,6 +121,9 @@ func parseReader(ctx context.Context, reader io.Reader, sink EventSink) (Summary
 			if err := sink(ctx, event); err != nil {
 				return summary, err
 			}
+		}
+		if terminalReadError {
+			break
 		}
 		if readErr == io.EOF {
 			break
@@ -128,15 +140,30 @@ func readBoundedLine(ctx context.Context, reader *bufio.Reader) ([]byte, error, 
 			return line, nil, overlong, err
 		}
 		chunk, err := reader.ReadSlice('\n')
-		line = append(line, chunk...)
-		if len(line) > maxLineBytes {
-			overlong = true
+		if !overlong {
+			remaining := maxLineBytes + 1 - len(line)
+			if remaining <= 0 || len(chunk) > remaining {
+				line = append(line, chunk[:maxInt(0, remaining)]...)
+				overlong = true
+			} else {
+				line = append(line, chunk...)
+				if len(line) > maxLineBytes {
+					overlong = true
+				}
+			}
 		}
 		if err == bufio.ErrBufferFull {
 			continue
 		}
 		return line, err, overlong, nil
 	}
+}
+
+func maxInt(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func parseLine(lineNumber int64, raw []byte) (Event, bool, bool) {

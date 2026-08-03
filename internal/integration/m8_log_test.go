@@ -1,6 +1,8 @@
 package integration
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"os"
 	"path/filepath"
@@ -45,6 +47,9 @@ func TestM8LogTaskCompletesAndExposesTimeline(t *testing.T) {
 	if _, err := application.Summary(context.Background(), created.ID); err == nil {
 		t.Fatal("snapshot summary unexpectedly available for log task")
 	}
+	if err := application.RecoverInterrupted(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	db, err := storage.OpenReadOnly(filepath.Join(task.NewService(dataDir).TaskDir(created.ID), "task.db"))
 	if err != nil {
@@ -57,6 +62,63 @@ func TestM8LogTaskCompletesAndExposesTimeline(t *testing.T) {
 	}
 	if rawCount != 0 {
 		t.Fatal("raw log text leaked into event fingerprint")
+	}
+	var kubeRows, checkpointRows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM kube_summaries WHERE task_id = ?`, created.ID).Scan(&kubeRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM analysis_checkpoints WHERE task_id = ?`, created.ID).Scan(&checkpointRows); err != nil {
+		t.Fatal(err)
+	}
+	if kubeRows != 0 || checkpointRows != 1 {
+		t.Fatalf("log task pseudo-results/checkpoints = %d/%d, want 0/1", kubeRows, checkpointRows)
+	}
+}
+
+func TestM8LogAcceptsGzipMagicAndEnforcesImportLimit(t *testing.T) {
+	root := t.TempDir()
+	gzipPath := filepath.Join(root, "events.bin")
+	file, err := os.Create(gzipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := gzip.NewWriter(file)
+	if _, err := writer.Write([]byte(`2026-08-03T10:00:00Z etcdserver: defragmentation finished, took=4ms` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(root, "data")
+	application := app.NewM5(dataDir, 10, 1, 1)
+	created, err := application.Create(context.Background(), task.CreateRequest{
+		Name: "gzip", SourcePath: gzipPath, InputType: "log", MaxInputBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Start(context.Background(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForLogStatus(t, application, created.ID, task.StatusCompleted)
+	result, err := application.Timeline(context.Background(), created.ID, storage.LogQuery{Limit: 10})
+	if err != nil || result.Total != 1 || result.Items[0].Type != "defrag" {
+		t.Fatalf("gzip timeline=%+v err=%v", result, err)
+	}
+
+	var oversized bytes.Buffer
+	oversized.WriteString("this input is larger than the configured limit")
+	oversizedPath := filepath.Join(root, "oversized.log")
+	if err := os.WriteFile(oversizedPath, oversized.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.Create(context.Background(), task.CreateRequest{
+		Name: "oversized", SourcePath: oversizedPath, InputType: "log", MaxInputBytes: 4,
+	}); err == nil {
+		t.Fatal("oversized input unexpectedly imported")
 	}
 }
 

@@ -1,6 +1,6 @@
 # etcd Space Inspector
 
-etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。它支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析、Key 保留 revision 活跃度，以及两个已完成 Snapshot 任务之间的持久化空间差分。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
+etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。它支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析、Key 保留 revision 活跃度、两个已完成 Snapshot 任务之间的持久化空间差分，以及独立的 etcd 日志时间线分析。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
 
 发布版本、对应标签和分支规则见 [RELEASE.md](RELEASE.md)。
 
@@ -65,6 +65,12 @@ bin/etcd-analyzer analyze \
 bin/etcd-analyzer analyze \
   --input ./member/snap/db \
   --type raw-db \
+  --output ./analysis-data
+
+# 分析 etcd 日志；支持文本、JSON、CRI、systemd 导出和 gzip（按内容识别）
+bin/etcd-analyzer analyze \
+  --input ./etcd.log.gz \
+  --type log \
   --output ./analysis-data
 
 # 比较两个已完成的分析任务
@@ -137,7 +143,7 @@ analysis-data/
 │   └── <task-id>/
 │       ├── manifest.json
 │       ├── task.db
-│       ├── source/input.db
+│       ├── source/input.db（Snapshot/raw-db）或 source/input.log（日志）
 │       ├── exports/report.html
 │       └── logs/
 └── diffs/
@@ -173,6 +179,7 @@ analysis-data/
 - `GET /api/v1/tasks/{id}/objects`
 - `GET /api/v1/tasks/{id}/objects/{object-id}`
 - `GET /api/v1/tasks/{id}/objects/{object-id}/revisions`
+- `GET /api/v1/tasks/{id}/timeline`
 - `POST /api/v1/diffs`
 - `GET /api/v1/diffs`
 - `GET /api/v1/diffs/{id}`
@@ -191,6 +198,8 @@ Key 列表支持 `prefix`、`minSize`、`minRevisions`、`tombstone`、`sort`、
 Kubernetes 对象列表支持 `group`、`resource`、`namespace`、`minSize`、`minRevisions`、`decodeStatus`、`field`、`sort`、`order`、`page` 和 `pageSize`。字段类别限于 managedFields、annotations、labels、spec、status、data 和 binaryData；对象详情只返回字段路径、大小、类型、哈希和相邻 revision 的变化分类。
 
 差分 Key 列表支持 `changeType`、`prefix`、`sort`、`order`、`page` 和 `pageSize`，其中 `changeType` 限于 `added`、`deleted` 和 `modified`。Prefix、Resource 和 Namespace 差分支持 `order` 与最大 500 条的 `limit`。
+
+日志任务的时间线接口返回扫描摘要、标准化事件分页和总数。支持 `from`、`to`、`eventType`、`severity`、`source`、`page`、`pageSize` 查询参数；时间使用 RFC 3339，事件类型和严重度使用固定白名单，单页最多 500 条。事件只包含时间、类型、严重度、来源、经过范围校验的 duration/revision/DB size 和 SHA-256 指纹，不返回原始日志行。
 
 ## 语义门控与安全边界
 
@@ -212,6 +221,8 @@ CRD JSON 使用结构化字段分析。每个 registry revision 会记录 `decod
 原始 Value 只在有界内存流水线中参与解码、长度与 SHA-256 计算，不写入 SQLite、日志、API 或 HTML。字段分析只持久化路径、字节数、类型和 SHA-256；Secret、ServiceAccount 等敏感资源在 Kubernetes 视图中使用 `redacted:<key-hash>` 名称。
 
 本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，也不采集日志、审计或 Prometheus 数据。它可以比较两个已完成任务：物理结果在两侧都有 bbolt 分析数据时生成；MVCC 和 Kubernetes 差分只有在两侧语义结果可用且 etcd 主次版本兼容时生成，否则明确降级且不猜测。差分数据库只保存大小、计数、Key 标识和聚合增量，不保存原始 Value。
+
+日志分析任务只读取导入的日志副本，流式解压 gzip 并按行识别 NOSPACE、quota exceeded、compaction、defrag、slow apply、backend/WAL fsync、leader change、request timeout、snapshot、lease、corruption、large request 等事件。未知行仅保留不可逆指纹；原始行、请求体、Token、完整 User-Agent 和未筛选字段不会写入任务数据库。日志时间线描述的是日志证据，不会在没有 Audit Log 或 Snapshot 关联证据时判断具体 Controller、客户端或用户。
 
 双 Snapshot 差分可以定位增长来自当前有效数据、历史 revision、tombstone、空闲页、Key、Prefix、Resource 或 Namespace，但单凭 Snapshot 仍不能确定具体 Controller、客户端或用户身份；这需要后续日志和 Audit Log 关联能力。
 

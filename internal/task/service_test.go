@@ -107,7 +107,7 @@ func TestServiceCreatesLogTaskWithoutDatabaseVersionDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.InputType != "log" || created.SourcePath != "source/input.log" || created.EtcdVersionSource != VersionSourceUnknown || created.DetectedEtcdVersion != "" {
+	if created.InputType != "log" || created.SourcePath != "source/input.log" || created.SchemaVersion != 2 || created.EtcdVersionSource != VersionSourceUnknown || created.DetectedEtcdVersion != "" {
 		t.Fatalf("created=%+v, want log input without DB version evidence", created)
 	}
 	if _, err := os.Stat(filepath.Join(svc.TaskDir(created.ID), "source", "input.log")); err != nil {

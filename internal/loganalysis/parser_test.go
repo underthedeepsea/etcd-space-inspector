@@ -151,6 +151,23 @@ func TestParseFileRejectsOutOfRangeNumericFields(t *testing.T) {
 	}
 }
 
+func TestParseFileHandlesInvalidGzipWithoutLooping(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid.log")
+	if err := os.WriteFile(path, []byte{0x1f, 0x8b, 0x00, 0xff}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := loganalysis.ParseFile(context.Background(), path, func(context.Context, loganalysis.Event) error {
+		t.Fatal("invalid gzip produced an event")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ParseFile() error = %v, want scan summary", err)
+	}
+	if summary.ParseErrors != 1 {
+		t.Fatalf("summary = %+v, want one gzip parse error", summary)
+	}
+}
+
 func writeLogFile(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "input.log")

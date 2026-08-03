@@ -280,9 +280,11 @@ func (a *Application) RecoverInterrupted(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := storage.NewKubeRepository(db, item.ID).EnsureUnavailable(ctx); err != nil {
-			db.Close()
-			return err
+		if item.InputType != "log" {
+			if err := storage.NewKubeRepository(db, item.ID).EnsureUnavailable(ctx); err != nil {
+				db.Close()
+				return err
+			}
 		}
 		if item.Status != task.StatusRunning {
 			if err := db.Close(); err != nil {

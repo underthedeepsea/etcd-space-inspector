@@ -69,6 +69,10 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Task, erro
 		detected = etcdversion.Detect(destination)
 	}
 	provided := strings.TrimSpace(request.EtcdVersion)
+	schemaVersion := 1
+	if request.InputType == "log" {
+		schemaVersion = 2
+	}
 	created := Task{
 		ID:                  id,
 		Name:                strings.TrimSpace(request.Name),
@@ -80,7 +84,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Task, erro
 		SourceSHA256:        meta.SHA256,
 		Status:              StatusPending,
 		CreatedAt:           time.Now().UTC(),
-		SchemaVersion:       1,
+		SchemaVersion:       schemaVersion,
 	}
 	if detected.Family != "" {
 		created.EtcdVersion = detected.Family
