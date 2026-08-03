@@ -178,7 +178,7 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return 1
 	}
 	handler := api.New(api.Dependencies{
-		Version: version.Value, Tasks: application, Analysis: application, MVCC: application, Kubernetes: application, Diffs: application,
+		Version: version.Value, Tasks: application, Analysis: application, MVCC: application, Kubernetes: application, Diffs: application, Logs: application,
 		MaxInputBytes: settings.Security.MaxInputBytes, UI: web.Handler(),
 	})
 	listener, err := net.Listen("tcp", settings.Server.Listen)
@@ -232,8 +232,8 @@ func loopbackAddress(address string) bool {
 func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("analyze", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	input := flags.String("input", "", "snapshot or raw database path")
-	inputType := flags.String("type", "snapshot", "snapshot or raw-db")
+	input := flags.String("input", "", "snapshot, raw database, or log path")
+	inputType := flags.String("type", "snapshot", "snapshot, raw-db, or log")
 	output := flags.String("output", "./analysis-data", "analysis data directory")
 	etcdVersion := flags.String("etcd-version", "", "source etcd version")
 	name := flags.String("name", "", "task name")
@@ -283,10 +283,15 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "load defaults: %v\n", err)
 		return 1
 	}
-	stages := []task.Stage{
-		app.PhysicalStage(manifests, settings.Analysis.SQLiteBatchSize),
-		app.MVCCStage(manifests, settings.Analysis.WorkerCount, settings.Analysis.ChannelSize, settings.Analysis.SQLiteBatchSize),
-		app.ReportStage(manifests),
+	var stages []task.Stage
+	if item.InputType == "log" {
+		stages = []task.Stage{app.LogStage(manifests, settings.Analysis.SQLiteBatchSize)}
+	} else {
+		stages = []task.Stage{
+			app.PhysicalStage(manifests, settings.Analysis.SQLiteBatchSize),
+			app.MVCCStage(manifests, settings.Analysis.WorkerCount, settings.Analysis.ChannelSize, settings.Analysis.SQLiteBatchSize),
+			app.ReportStage(manifests),
+		}
 	}
 	if err := task.NewRunner(repository, stages).Start(ctx, item.ID); err != nil {
 		fmt.Fprintf(stderr, "analyze task: %v\n", err)

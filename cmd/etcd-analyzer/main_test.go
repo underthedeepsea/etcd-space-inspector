@@ -98,6 +98,44 @@ func TestRunAnalyzeImportsTask(t *testing.T) {
 	}
 }
 
+func TestRunAnalyzeLogTask(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "input.log")
+	if err := os.WriteFile(source, []byte(`{"ts":"2026-08-03T10:00:00Z","msg":"backend commit"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "data")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"analyze", "--input", source, "--type", "log", "--output", output}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "completed") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	manifests, err := filepath.Glob(filepath.Join(output, "tasks", "*", "manifest.json"))
+	if err != nil || len(manifests) != 1 {
+		t.Fatalf("manifests=%v err=%v", manifests, err)
+	}
+	manifest, err := os.ReadFile(manifests[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(manifest, []byte(`"inputFile": "source/input.log"`)) || !bytes.Contains(manifest, []byte(`"currentStage": "completed"`)) {
+		t.Fatalf("manifest=%s", manifest)
+	}
+}
+
+func TestRunAnalyzeHelpListsLogInput(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"analyze", "--help"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "log") {
+		t.Fatalf("help=%q", stderr.String())
+	}
+}
+
 func TestRunRejectsUnknownCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"unknown"}, &stdout, &stderr); code != 2 {

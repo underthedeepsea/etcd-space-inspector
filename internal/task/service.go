@@ -31,8 +31,8 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Task, erro
 	if strings.TrimSpace(request.Name) == "" {
 		return Task{}, fmt.Errorf("task name is required")
 	}
-	if request.InputType != "snapshot" && request.InputType != "raw-db" {
-		return Task{}, fmt.Errorf("input type must be snapshot or raw-db")
+	if request.InputType != "snapshot" && request.InputType != "raw-db" && request.InputType != "log" {
+		return Task{}, fmt.Errorf("input type must be snapshot, raw-db, or log")
 	}
 	id, err := newID()
 	if err != nil {
@@ -55,25 +55,36 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Task, erro
 		}
 	}()
 
-	destination := filepath.Join(dir, "source", "input.db")
+	destinationName := "input.db"
+	if request.InputType == "log" {
+		destinationName = "input.log"
+	}
+	destination := filepath.Join(dir, "source", destinationName)
 	meta, err := ingest.Copy(ctx, request.SourcePath, destination, request.MaxInputBytes)
 	if err != nil {
 		return Task{}, fmt.Errorf("import task source: %w", err)
 	}
-	detected := etcdversion.Detect(destination)
+	detected := etcdversion.Result{}
+	if request.InputType != "log" {
+		detected = etcdversion.Detect(destination)
+	}
 	provided := strings.TrimSpace(request.EtcdVersion)
+	schemaVersion := 1
+	if request.InputType == "log" {
+		schemaVersion = 2
+	}
 	created := Task{
 		ID:                  id,
 		Name:                strings.TrimSpace(request.Name),
 		InputType:           request.InputType,
 		EtcdVersionSource:   VersionSourceUnknown,
 		DetectedEtcdVersion: detected.Family,
-		SourcePath:          "source/input.db",
+		SourcePath:          filepath.ToSlash(filepath.Join("source", destinationName)),
 		SourceSize:          meta.Size,
 		SourceSHA256:        meta.SHA256,
 		Status:              StatusPending,
 		CreatedAt:           time.Now().UTC(),
-		SchemaVersion:       1,
+		SchemaVersion:       schemaVersion,
 	}
 	if detected.Family != "" {
 		created.EtcdVersion = detected.Family

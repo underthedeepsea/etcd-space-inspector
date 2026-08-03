@@ -94,6 +94,30 @@ func TestServiceRecordsDBVersionEvidence(t *testing.T) {
 	}
 }
 
+func TestServiceCreatesLogTaskWithoutDatabaseVersionDetection(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "etcd.log")
+	if err := os.WriteFile(source, []byte(`{"ts":"2026-08-03T10:00:00Z","msg":"backend commit"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(filepath.Join(root, "data"))
+	created, err := svc.Create(context.Background(), CreateRequest{
+		Name: "logs", SourcePath: source, InputType: "log", MaxInputBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.InputType != "log" || created.SourcePath != "source/input.log" || created.SchemaVersion != 2 || created.EtcdVersionSource != VersionSourceUnknown || created.DetectedEtcdVersion != "" {
+		t.Fatalf("created=%+v, want log input without DB version evidence", created)
+	}
+	if _, err := os.Stat(filepath.Join(svc.TaskDir(created.ID), "source", "input.log")); err != nil {
+		t.Fatalf("input.log: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(svc.TaskDir(created.ID), "source", "input.db")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected input.db stat error=%v", err)
+	}
+}
+
 func clusterVersionSource(t *testing.T, root, version string) string {
 	t.Helper()
 	path := filepath.Join(root, "etcd.db")
