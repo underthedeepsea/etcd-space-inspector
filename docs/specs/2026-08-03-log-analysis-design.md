@@ -97,7 +97,7 @@ GET /api/v1/tasks/{id}/timeline
 - `items`：事件分页；
 - `total`、`page`、`pageSize`。
 
-查询参数为 `from`、`to`、`eventType`、`severity`、`page` 和 `pageSize`。非日志任务返回明确的“不支持日志时间线”错误，不返回空的伪分析结果。
+查询参数为 `from`、`to`、`eventType`、`severity`、`source`、`page` 和 `pageSize`。非日志任务返回明确的“不支持日志时间线”错误，不返回空的伪分析结果。
 
 CLI 示例：
 
