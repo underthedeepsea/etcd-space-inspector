@@ -8,6 +8,7 @@ import (
 	"time"
 
 	domain "etcd-analyzer/internal/diff"
+	"etcd-analyzer/internal/loganalysis"
 	"etcd-analyzer/internal/storage"
 )
 
@@ -143,6 +144,8 @@ func (s *server) handleDiff(writer http.ResponseWriter, request *http.Request, r
 		s.handleDiffKeys(writer, request, id)
 	case "prefixes", "resources", "namespaces":
 		s.handleDiffAggregates(writer, request, id, resource)
+	case "log-evidence":
+		s.handleDiffLogEvidence(writer, request, id)
 	default:
 		writeError(writer, http.StatusNotFound, "NOT_FOUND", "comparison resource not found")
 	}
@@ -162,6 +165,50 @@ func (s *server) handleDiffKeys(writer http.ResponseWriter, request *http.Reques
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"items": result.Items, "total": result.Total, "page": page, "pageSize": pageSize,
 	})
+}
+
+func (s *server) handleDiffLogEvidence(writer http.ResponseWriter, request *http.Request, diffID string) {
+	taskID, query, page, pageSize, err := parseDiffLogEvidenceQuery(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid log evidence query")
+		return
+	}
+	result, err := s.dependencies.Diffs.DiffLogEvidence(request.Context(), diffID, taskID, query)
+	if err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	if result.Items == nil {
+		result.Items = []loganalysis.Event{}
+	}
+	if result.ByEventType == nil {
+		result.ByEventType = []loganalysis.EvidenceCount{}
+	}
+	if result.BySeverity == nil {
+		result.BySeverity = []loganalysis.EvidenceCount{}
+	}
+	if result.BySource == nil {
+		result.BySource = []loganalysis.EvidenceCount{}
+	}
+	result.Page, result.PageSize = page, pageSize
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func parseDiffLogEvidenceQuery(request *http.Request) (string, storage.LogQuery, int, int, error) {
+	values := request.URL.Query()
+	taskIDs := values["logTaskId"]
+	if len(taskIDs) != 1 || !validEvidenceTaskID(taskIDs[0]) {
+		return "", storage.LogQuery{}, 0, 0, fmt.Errorf("one safe logTaskId is required")
+	}
+	page, pageSize, err := pagination(request, 100)
+	if err != nil {
+		return "", storage.LogQuery{}, 0, 0, err
+	}
+	return taskIDs[0], storage.LogQuery{Limit: pageSize, Offset: (page - 1) * pageSize}, page, pageSize, nil
+}
+
+func validEvidenceTaskID(value string) bool {
+	return value != "" && value != "." && value != ".." && !strings.ContainsAny(value, `/\\`)
 }
 
 func parseDiffKeyQuery(request *http.Request) (storage.DiffKeyQuery, int, int, error) {

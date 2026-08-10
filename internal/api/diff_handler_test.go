@@ -3,13 +3,16 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"etcd-analyzer/internal/apperr"
 	domain "etcd-analyzer/internal/diff"
+	"etcd-analyzer/internal/loganalysis"
 	"etcd-analyzer/internal/storage"
 )
 
@@ -96,18 +99,94 @@ func TestDiffRoutesRejectInvalidInput(t *testing.T) {
 	}
 }
 
+func TestDiffLogEvidenceRoute(t *testing.T) {
+	service := &fakeDiffService{evidence: loganalysis.DiffEvidence{
+		DiffID: "d1", LogTaskID: "log-1", SourceCompatibility: "unverified",
+		EvidenceOnly: true, AttributionAvailable: false,
+	}}
+	handler := New(Dependencies{Diffs: service})
+	recorder := httptest.NewRecorder()
+	path := "/api/v1/diffs/d1/log-evidence?logTaskId=log-1&page=2&pageSize=20"
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if service.evidenceDiffID != "d1" || service.evidenceTaskID != "log-1" || service.evidenceQuery.Limit != 20 || service.evidenceQuery.Offset != 20 {
+		t.Fatalf("diff=%q task=%q query=%+v", service.evidenceDiffID, service.evidenceTaskID, service.evidenceQuery)
+	}
+	var result loganalysis.DiffEvidence
+	if err := json.NewDecoder(recorder.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Page != 2 || result.PageSize != 20 || result.Items == nil || result.ByEventType == nil || result.BySeverity == nil || result.BySource == nil || !result.EvidenceOnly || result.AttributionAvailable {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestDiffLogEvidenceRejectsInvalidQueryAndMethod(t *testing.T) {
+	handler := New(Dependencies{Diffs: &fakeDiffService{}})
+	paths := []string{
+		"/api/v1/diffs/d1/log-evidence",
+		"/api/v1/diffs/d1/log-evidence?logTaskId=",
+		"/api/v1/diffs/d1/log-evidence?logTaskId=a&logTaskId=b",
+		"/api/v1/diffs/d1/log-evidence?logTaskId=a%2Fb",
+		"/api/v1/diffs/d1/log-evidence?logTaskId=a%5Cb",
+		"/api/v1/diffs/d1/log-evidence?logTaskId=log-1&pageSize=501",
+	}
+	for _, path := range paths {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"INPUT_INVALID"`) {
+			t.Fatalf("path=%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/diffs/d1/log-evidence?logTaskId=log-1", nil))
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDiffLogEvidenceMapsStableErrors(t *testing.T) {
+	for _, test := range []struct {
+		code   string
+		status int
+	}{
+		{code: "DIFF_NOT_FOUND", status: http.StatusNotFound},
+		{code: "LOG_TASK_NOT_FOUND", status: http.StatusNotFound},
+		{code: "DIFF_NOT_COMPLETED", status: http.StatusConflict},
+		{code: "DIFF_OBSERVED_AT_REQUIRED", status: http.StatusConflict},
+		{code: "LOG_EVIDENCE_TASK_TYPE", status: http.StatusConflict},
+		{code: "LOG_TASK_NOT_COMPLETED", status: http.StatusConflict},
+	} {
+		t.Run(test.code, func(t *testing.T) {
+			handler := New(Dependencies{Diffs: &fakeDiffService{evidenceErr: apperr.E(test.code, "safe error", nil)}})
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/diffs/d1/log-evidence?logTaskId=log-1", nil))
+			if recorder.Code != test.status || !strings.Contains(recorder.Body.String(), `"code":"`+test.code+`"`) {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
 type fakeDiffService struct {
-	created    domain.CreateRequest
-	items      []domain.Comparison
-	summary    domain.Summary
-	keys       storage.DiffKeyResult
-	prefixes   []domain.PrefixDelta
-	resources  []domain.ResourceDelta
-	namespaces []domain.NamespaceDelta
-	keyQuery   storage.DiffKeyQuery
-	deltaQuery storage.DiffDeltaQuery
-	cancelled  bool
-	deleted    bool
+	created        domain.CreateRequest
+	items          []domain.Comparison
+	summary        domain.Summary
+	keys           storage.DiffKeyResult
+	prefixes       []domain.PrefixDelta
+	resources      []domain.ResourceDelta
+	namespaces     []domain.NamespaceDelta
+	keyQuery       storage.DiffKeyQuery
+	deltaQuery     storage.DiffDeltaQuery
+	evidence       loganalysis.DiffEvidence
+	evidenceErr    error
+	evidenceDiffID string
+	evidenceTaskID string
+	evidenceQuery  storage.LogQuery
+	cancelled      bool
+	deleted        bool
 }
 
 func (f *fakeDiffService) CreateDiff(_ context.Context, request domain.CreateRequest) (domain.Comparison, error) {
@@ -143,4 +222,8 @@ func (f *fakeDiffService) DiffResources(_ context.Context, _ string, query stora
 func (f *fakeDiffService) DiffNamespaces(_ context.Context, _ string, query storage.DiffDeltaQuery) ([]domain.NamespaceDelta, error) {
 	f.deltaQuery = query
 	return f.namespaces, nil
+}
+func (f *fakeDiffService) DiffLogEvidence(_ context.Context, diffID, taskID string, query storage.LogQuery) (loganalysis.DiffEvidence, error) {
+	f.evidenceDiffID, f.evidenceTaskID, f.evidenceQuery = diffID, taskID, query
+	return f.evidence, f.evidenceErr
 }
