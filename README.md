@@ -135,6 +135,18 @@ Web UI 顶部可切换中文与 English；选择仅保存在当前浏览器本�
 
 API 的 `POST /api/v1/diffs` 支持可选的 RFC 3339 字段 `baselineObservedAt` 和 `targetObservedAt`；它们同样必须成对提供。差分概览中的 `observationWindowSeconds` 表示该时间窗口。
 
+## 日志与 Snapshot 时间关联
+
+已完成的双 Snapshot 差分可以选择一个已完成的 `log` 任务，查询：
+
+```text
+GET /api/v1/diffs/{diffId}/log-evidence?logTaskId=<id>&page=1&pageSize=100
+```
+
+关联窗口固定为 `(baselineObservedAt, targetObservedAt]`：排除基线时刻，包含目标时刻；`observed_at` 未知的事件不会匹配。`total` 以及按事件类型、严重度和来源的三组聚合统计覆盖整个窗口，不受事件分页影响。响应同时提供日志任务名称、输入 SHA-256、日志首末时间、窗口秒数和 `full`、`partial`、`none`、`unknown` 覆盖状态。
+
+M9 始终提示日志来源与 Snapshot 的集群或 Member 一致性未经验证；时间重合只是证据，不是根因、Controller、客户端或用户归因。没有采集时间的差分需要重新创建后才能关联。接口和页面只返回标准化事件字段，不返回原始日志行、请求体、Token 或未筛选 JSON；M9 不包含 Audit、Prometheus、新 CLI 关联命令或独立 HTML 关联报告。
+
 ## 数据目录
 
 ```text
@@ -188,6 +200,7 @@ analysis-data/
 - `GET /api/v1/diffs/{id}/prefixes`
 - `GET /api/v1/diffs/{id}/resources`
 - `GET /api/v1/diffs/{id}/namespaces`
+- `GET /api/v1/diffs/{id}/log-evidence`
 - `POST /api/v1/diffs/{id}/cancel`
 - `DELETE /api/v1/diffs/{id}`
 
