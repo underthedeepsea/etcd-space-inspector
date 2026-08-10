@@ -13,6 +13,7 @@ import (
 // LogQuery is the allow-listed timeline filter.
 type LogQuery struct {
 	From, To      *time.Time
+	FromExclusive bool
 	EventType     string
 	Severity      string
 	Source        string
@@ -24,6 +25,16 @@ type TimelineResult struct {
 	Summary loganalysis.Summary
 	Items   []loganalysis.Event
 	Total   int
+}
+
+// LogEvidenceResult combines a filtered event page with whole-window counts.
+type LogEvidenceResult struct {
+	Summary     loganalysis.Summary
+	Items       []loganalysis.Event
+	Total       int
+	ByEventType []loganalysis.EvidenceCount
+	BySeverity  []loganalysis.EvidenceCount
+	BySource    []loganalysis.EvidenceCount
 }
 
 // LogRepository stores structured events for one task-local database.
@@ -193,11 +204,68 @@ LIMIT ? OFFSET ?`, append(args, query.Limit, query.Offset)...)
 	return TimelineResult{Summary: summary, Items: items, Total: total}, nil
 }
 
+// Evidence returns one paginated page and whole-window aggregates for a diff interval.
+func (r *LogRepository) Evidence(ctx context.Context, query LogQuery) (LogEvidenceResult, error) {
+	query.FromExclusive = true
+	timeline, err := r.Timeline(ctx, query)
+	if err != nil {
+		return LogEvidenceResult{}, err
+	}
+	where, args := logEventWhere(r.taskID, query)
+	byType, err := r.evidenceCounts(ctx, where, args, "event_type")
+	if err != nil {
+		return LogEvidenceResult{}, err
+	}
+	bySeverity, err := r.evidenceCounts(ctx, where, args, "severity")
+	if err != nil {
+		return LogEvidenceResult{}, err
+	}
+	bySource, err := r.evidenceCounts(ctx, where, args, "source")
+	if err != nil {
+		return LogEvidenceResult{}, err
+	}
+	return LogEvidenceResult{
+		Summary: timeline.Summary, Items: timeline.Items, Total: timeline.Total,
+		ByEventType: byType, BySeverity: bySeverity, BySource: bySource,
+	}, nil
+}
+
+func (r *LogRepository) evidenceCounts(ctx context.Context, where []string, args []any, column string) ([]loganalysis.EvidenceCount, error) {
+	switch column {
+	case "event_type", "severity", "source":
+	default:
+		return nil, fmt.Errorf("unsupported log evidence aggregate")
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT `+column+` AS name, COUNT(*) AS count_value
+FROM log_events WHERE `+strings.Join(where, " AND ")+`
+GROUP BY `+column+` ORDER BY count_value DESC, name ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate log evidence: %w", err)
+	}
+	defer rows.Close()
+	items := make([]loganalysis.EvidenceCount, 0)
+	for rows.Next() {
+		var item loganalysis.EvidenceCount
+		if err := rows.Scan(&item.Name, &item.Count); err != nil {
+			return nil, fmt.Errorf("scan log evidence aggregate: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate log evidence aggregate: %w", err)
+	}
+	return items, nil
+}
+
 func logEventWhere(taskID string, query LogQuery) ([]string, []any) {
 	where := []string{"task_id = ?"}
 	args := []any{taskID}
 	if query.From != nil {
-		where = append(where, "observed_at >= ?")
+		operator := "observed_at >= ?"
+		if query.FromExclusive {
+			operator = "observed_at > ?"
+		}
+		where = append(where, operator)
 		args = append(args, formatTime(*query.From))
 	}
 	if query.To != nil {

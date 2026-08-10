@@ -9,12 +9,14 @@ import {
   deleteTask,
   deleteComparison,
   DiffKeyResult,
+  DiffLogEvidence,
   DiffNamespace,
   DiffPrefix,
   DiffResource,
   DiffSummary,
   getComparison,
   getDiffOverview,
+  getDiffLogEvidence,
   getTimeline,
   getKubernetesObject,
   getKubernetesSummary,
@@ -52,6 +54,7 @@ import {
   SpaceSummary,
   startTask,
   Task,
+  EvidenceCount,
   KubernetesObject,
   KubernetesSummary,
 } from './api';
@@ -314,13 +317,13 @@ export default function App() {
       {selectedTask && (selectedTask.inputType === 'log'
         ? <LogTimelineAnalysis task={selectedTask} onClose={() => setSelectedTask(null)} />
         : <PhysicalAnalysis taskId={selectedTask.taskId} onClose={() => setSelectedTask(null)} />)}
-      {selectedDiff && <DiffAnalysis diffId={selectedDiff} onClose={() => setSelectedDiff(null)} />}
+      {selectedDiff && <DiffAnalysis diffId={selectedDiff} tasks={tasks} onClose={() => setSelectedDiff(null)} />}
     </main>
     </TranslationContext.Provider>
   );
 }
 
-function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void }) {
+function DiffAnalysis({ diffId, tasks, onClose }: { diffId: string; tasks: Task[]; onClose: () => void }) {
   const { t } = useTranslation();
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [summary, setSummary] = useState<DiffSummary | null>(null);
@@ -416,6 +419,7 @@ function DiffAnalysis({ diffId, onClose }: { diffId: string; onClose: () => void
           {namespaces.map((item) => <tr key={item.namespace || 'cluster-scoped'}><td>{item.namespace || t('value.clusterScoped')}</td><td>{formatSigned(item.currentObjectsDelta)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td></tr>)}
         </tbody></table></div></div>
       </div>}
+      <DiffLogEvidencePanel comparison={comparison} tasks={tasks} />
     </>}
   </section>;
 }
@@ -425,6 +429,93 @@ function DiffKeyTable({ title, result }: { title: string; result: DiffKeyResult 
   return <div><h3>{title}</h3><div className="table-wrap"><table><thead><tr><th>{t('comparison.key')}</th><th>{t('comparison.change')}</th><th>{t('comparison.current')}</th><th>{t('comparison.history')}</th><th>{t('comparison.total')}</th></tr></thead><tbody>
     {result?.items.map((item) => <tr key={item.keyHash}><td><code>{item.key}</code></td><td>{changeTypeLabel(item.changeType, t)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td><td>{formatSignedBytes(item.totalBytesDelta)}</td></tr>)}
   </tbody></table></div></div>;
+}
+
+function evidenceCoverageLabel(value: DiffLogEvidence['coverage'], t: Translate): string {
+  const keys: Record<DiffLogEvidence['coverage'], TextKey> = {
+    full: 'evidence.coverage.full', partial: 'evidence.coverage.partial',
+    none: 'evidence.coverage.none', unknown: 'evidence.coverage.unknown',
+  };
+  return t(keys[value]);
+}
+
+function EvidenceAggregateTable({ title, items }: { title: string; items: EvidenceCount[] }) {
+  const { t } = useTranslation();
+  return <div><h4>{title}</h4><div className="table-wrap"><table><thead><tr><th>{t('comparison.key')}</th><th>{t('comparison.total')}</th></tr></thead><tbody>
+    {items.map((item) => <tr key={item.name}><td><code>{item.name}</code></td><td>{item.count}</td></tr>)}
+    {items.length === 0 && <tr><td colSpan={2} className="empty">—</td></tr>}
+  </tbody></table></div></div>;
+}
+
+function DiffLogEvidencePanel({ comparison, tasks }: { comparison: Comparison | null; tasks: Task[] }) {
+  const { locale, t } = useTranslation();
+  const completedLogs = tasks.filter((task) => task.inputType === 'log' && task.status === 'completed');
+  const [logTaskId, setLogTaskId] = useState('');
+  const [evidence, setEvidence] = useState<DiffLogEvidence | null>(null);
+  const [page, setPage] = useState(1);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!comparison || comparison.status !== 'completed' || !comparison.baselineObservedAt || !comparison.targetObservedAt || !logTaskId) {
+      setEvidence(null);
+      setError('');
+      return;
+    }
+    let active = true;
+    getDiffLogEvidence(comparison.diffId, logTaskId, page)
+      .then((nextEvidence) => {
+        if (!active) return;
+        setEvidence(nextEvidence);
+        setError('');
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error ? reason.message : t('evidence.loadFailed'));
+      });
+    return () => { active = false; };
+  }, [comparison, logTaskId, page, t]);
+
+  function selectLog(value: string) {
+    setLogTaskId(value);
+    setPage(1);
+    setEvidence(null);
+    setError('');
+  }
+
+  if (!comparison) return null;
+  const hasWindow = Boolean(comparison.baselineObservedAt && comparison.targetObservedAt);
+  return <section className="evidence-panel" aria-labelledby="evidence-heading">
+    <h3 id="evidence-heading">{t('evidence.title')}</h3>
+    {!hasWindow && <p className="notice">{t('evidence.noWindow')} {t('evidence.recreateComparison')}</p>}
+    {hasWindow && <>
+      <label>{t('evidence.selectLog')}<select value={logTaskId} onChange={(event) => selectLog(event.target.value)}>
+        <option value="">{completedLogs.length === 0 ? t('evidence.noLogs') : t('evidence.selectLog')}</option>
+        {completedLogs.map((task) => <option key={task.taskId} value={task.taskId}>{task.name} · {task.sha256.slice(0, 12)}</option>)}
+      </select></label>
+      {error && <p role="alert">{error}</p>}
+      {evidence && <>
+        <p className="notice">{t('evidence.sourceUnverified')} {t('evidence.evidenceOnly')}</p>
+        <div className="evidence-meta">
+          <p><strong>{evidence.logTaskName}</strong> · <span className="evidence-hash">{t('evidence.taskSha', { sha: evidence.logTaskSha256 })}</span></p>
+          <p>{t('log.firstObservedAt')}: {logTime(evidence.logFirstObservedAt, locale, t)} · {t('log.lastObservedAt')}: {logTime(evidence.logLastObservedAt, locale, t)}</p>
+          <p>{t('evidence.window', { from: formatDate(evidence.from, locale), to: formatDate(evidence.to, locale) })} · {t('evidence.coverage')}: {evidenceCoverageLabel(evidence.coverage, t)}</p>
+        </div>
+        <div className="metrics">
+          <Metric metricKey="evidence.matchedEvents" value={String(evidence.total)} />
+          <Metric metricKey="evidence.windowSeconds" value={String(evidence.windowSeconds)} />
+        </div>
+        <div className="ranking-grid">
+          <EvidenceAggregateTable title={t('evidence.byEventType')} items={evidence.byEventType} />
+          <EvidenceAggregateTable title={t('evidence.bySeverity')} items={evidence.bySeverity} />
+          <EvidenceAggregateTable title={t('evidence.bySource')} items={evidence.bySource} />
+        </div>
+        <div className="table-wrap"><table><thead><tr><th>{t('log.time')}</th><th>{t('log.event')}</th><th>{t('log.severity')}</th><th>{t('log.source')}</th><th>{t('log.line')}</th><th>{t('log.duration')}</th><th>{t('log.revision')}</th><th>{t('log.dbSize')}</th><th>{t('log.parseStatus')}</th><th>{t('log.fingerprint')}</th></tr></thead><tbody>
+          {evidence.items.map((event: LogEvent) => <tr key={event.eventId}><td>{logTime(event.observedAt, locale, t)}</td><td><code>{event.eventType}</code></td><td><span className={`badge ${event.severity.toLowerCase()}`}>{event.severity}</span></td><td>{event.source}</td><td>{event.lineNumber}</td><td>{logValue(event.durationMs)}</td><td>{logValue(event.revision)}</td><td>{event.dbSizeBytes === undefined ? '—' : formatBytes(event.dbSizeBytes)}</td><td>{event.parseStatus}</td><td><code>{event.messageFingerprint.slice(0, 12)}</code></td></tr>)}
+          {evidence.items.length === 0 && <tr><td colSpan={10} className="empty">{t('evidence.empty')}</td></tr>}
+        </tbody></table></div>
+        <div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t('evidence.previous')}</button><span>{t('pagination.records', { page, count: evidence.total })}</span><button disabled={page * evidence.pageSize >= evidence.total} onClick={() => setPage((value) => value + 1)}>{t('evidence.next')}</button></div>
+      </>}
+    </>}
+  </section>;
 }
 
 const logEventTypes = [

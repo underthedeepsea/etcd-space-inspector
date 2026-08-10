@@ -94,5 +94,45 @@ type Summary struct {
 	LastObservedAt   *time.Time `json:"lastObservedAt,omitempty"`
 }
 
+// EvidenceCount is one stable whole-window aggregate bucket.
+type EvidenceCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// Coverage describes how the log scan's known time range intersects a diff window.
+type Coverage string
+
+const (
+	CoverageFull    Coverage = "full"
+	CoveragePartial Coverage = "partial"
+	CoverageNone    Coverage = "none"
+	CoverageUnknown Coverage = "unknown"
+)
+
+// DiffEvidence is a read-only, derived correlation response for one diff and log task.
+type DiffEvidence struct {
+	DiffID               string          `json:"diffId"`
+	LogTaskID            string          `json:"logTaskId"`
+	LogTaskName          string          `json:"logTaskName"`
+	LogTaskSHA256        string          `json:"logTaskSha256"`
+	LogFirstObservedAt   *time.Time      `json:"logFirstObservedAt,omitempty"`
+	LogLastObservedAt    *time.Time      `json:"logLastObservedAt,omitempty"`
+	Coverage             Coverage        `json:"coverage"`
+	SourceCompatibility  string          `json:"sourceCompatibility"`
+	From                 time.Time       `json:"from"`
+	To                   time.Time       `json:"to"`
+	WindowSeconds        int64           `json:"windowSeconds"`
+	Total                int             `json:"total"`
+	ByEventType          []EvidenceCount `json:"byEventType"`
+	BySeverity           []EvidenceCount `json:"bySeverity"`
+	BySource             []EvidenceCount `json:"bySource"`
+	Items                []Event         `json:"items"`
+	Page                 int             `json:"page"`
+	PageSize             int             `json:"pageSize"`
+	EvidenceOnly         bool            `json:"evidenceOnly"`
+	AttributionAvailable bool            `json:"attributionAvailable"`
+}
+
 // EventSink receives one event at a time and may stop parsing with an error.
 type EventSink func(context.Context, Event) error

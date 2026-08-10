@@ -63,6 +63,7 @@ type DiffService interface {
 	DiffPrefixes(context.Context, string, storage.DiffDeltaQuery) ([]domain.PrefixDelta, error)
 	DiffResources(context.Context, string, storage.DiffDeltaQuery) ([]domain.ResourceDelta, error)
 	DiffNamespaces(context.Context, string, storage.DiffDeltaQuery) ([]domain.NamespaceDelta, error)
+	DiffLogEvidence(context.Context, string, string, storage.LogQuery) (loganalysis.DiffEvidence, error)
 }
 
 // LogService is the structured log timeline query boundary.
@@ -590,9 +591,9 @@ func writeOperationError(writer http.ResponseWriter, err error) {
 	if errors.As(err, &coded) {
 		status := http.StatusConflict
 		switch coded.Code {
-		case "DIFF_TASK_NOT_FOUND":
+		case "DIFF_TASK_NOT_FOUND", "DIFF_NOT_FOUND", "LOG_TASK_NOT_FOUND":
 			status = http.StatusNotFound
-		case "DIFF_SAME_TASK":
+		case "DIFF_SAME_TASK", "INPUT_INVALID":
 			status = http.StatusBadRequest
 		}
 		writeError(writer, status, coded.Code, coded.Message)
