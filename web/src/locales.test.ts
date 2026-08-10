@@ -77,3 +77,24 @@ for (const key of logKeys) {
     assert.ok(text(locale, key).length > 0);
   }
 }
+
+const evidenceKeys: TextKey[] = [
+  'evidence.title', 'evidence.selectLog', 'evidence.noLogs', 'evidence.noWindow',
+  'evidence.recreateComparison', 'evidence.loadFailed', 'evidence.window',
+  'evidence.coverage', 'evidence.coverage.full', 'evidence.coverage.partial',
+  'evidence.coverage.none', 'evidence.coverage.unknown', 'evidence.sourceUnverified',
+  'evidence.evidenceOnly', 'evidence.byEventType', 'evidence.bySeverity',
+  'evidence.bySource', 'evidence.taskSha', 'evidence.empty',
+  'evidence.previous', 'evidence.next',
+];
+for (const key of evidenceKeys) {
+  for (const locale of ['zh', 'en'] as const) assert.ok(text(locale, key).length > 0);
+}
+
+for (const key of ['evidence.matchedEvents', 'evidence.windowSeconds'] as const) {
+  for (const locale of ['zh', 'en'] as const) {
+    const copy = metric(locale, key);
+    assert.ok(copy.label.length > 0);
+    assert.ok(copy.help.length > 0);
+  }
+}

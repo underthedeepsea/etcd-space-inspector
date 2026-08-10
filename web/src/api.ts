@@ -55,6 +55,36 @@ export interface LogTimeline {
   pageSize: number;
 }
 
+export type EvidenceCoverage = 'full' | 'partial' | 'none' | 'unknown';
+
+export interface EvidenceCount {
+  name: string;
+  count: number;
+}
+
+export interface DiffLogEvidence {
+  diffId: string;
+  logTaskId: string;
+  logTaskName: string;
+  logTaskSha256: string;
+  logFirstObservedAt?: string;
+  logLastObservedAt?: string;
+  coverage: EvidenceCoverage;
+  sourceCompatibility: 'unverified';
+  from: string;
+  to: string;
+  windowSeconds: number;
+  total: number;
+  byEventType: EvidenceCount[];
+  bySeverity: EvidenceCount[];
+  bySource: EvidenceCount[];
+  items: LogEvent[];
+  page: number;
+  pageSize: number;
+  evidenceOnly: true;
+  attributionAvailable: false;
+}
+
 export interface SpaceSummary {
   physicalFileSize: number;
   pageSize: number;
@@ -513,7 +543,12 @@ export function createComparison(input: CreateComparison): Promise<Comparison> {
 }
 
 export function getComparison(id: string): Promise<Comparison> {
-  return request(`/api/v1/diffs/${encodeURIComponent(id)}`);
+	return request(`/api/v1/diffs/${encodeURIComponent(id)}`);
+}
+
+export function getDiffLogEvidence(diffId: string, logTaskId: string, page: number): Promise<DiffLogEvidence> {
+  const query = new URLSearchParams({ logTaskId, page: String(page), pageSize: '50' });
+  return request(`/api/v1/diffs/${encodeURIComponent(diffId)}/log-evidence?${query}`);
 }
 
 export function cancelComparison(id: string): Promise<void> {
