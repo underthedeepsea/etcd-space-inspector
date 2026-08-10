@@ -94,5 +94,11 @@ type Summary struct {
 	LastObservedAt   *time.Time `json:"lastObservedAt,omitempty"`
 }
 
+// EvidenceCount is one stable whole-window aggregate bucket.
+type EvidenceCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
 // EventSink receives one event at a time and may stop parsing with an error.
 type EventSink func(context.Context, Event) error

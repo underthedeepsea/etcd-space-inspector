@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -116,5 +117,56 @@ func TestLogRepositoryPersistsSummaryAndFiltersTimeline(t *testing.T) {
 	}
 	if resetSummary.TotalLines != 0 || resetSummary.FirstObservedAt != nil || resetSummary.LastObservedAt != nil {
 		t.Fatalf("reset summary = %+v, want zero summary", resetSummary)
+	}
+}
+
+func TestLogRepositoryEvidenceUsesExclusiveStartAndWholeWindowAggregates(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "task.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repository := NewLogRepository(db, "task-1")
+	from := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
+	inside := from.Add(time.Minute)
+	insideAgain := from.Add(2 * time.Minute)
+	to := from.Add(3 * time.Minute)
+	after := to.Add(time.Minute)
+	events := []loganalysis.Event{
+		{LineNumber: 1, ObservedAt: &from, Type: loganalysis.EventNoSpace, Severity: loganalysis.SeverityWarn, Source: "mvcc", ParseStatus: "recognized", MessageFingerprint: "baseline"},
+		{LineNumber: 2, ObservedAt: &inside, Type: loganalysis.EventCompaction, Severity: loganalysis.SeverityInfo, Source: "etcdserver", ParseStatus: "recognized", MessageFingerprint: "inside-1"},
+		{LineNumber: 3, ObservedAt: &insideAgain, Type: loganalysis.EventNoSpace, Severity: loganalysis.SeverityWarn, Source: "mvcc", ParseStatus: "recognized", MessageFingerprint: "inside-2"},
+		{LineNumber: 4, ObservedAt: &to, Type: loganalysis.EventNoSpace, Severity: loganalysis.SeverityWarn, Source: "mvcc", ParseStatus: "recognized", MessageFingerprint: "target"},
+		{LineNumber: 5, ObservedAt: &after, Type: loganalysis.EventDefrag, Severity: loganalysis.SeverityInfo, Source: "backend", ParseStatus: "recognized", MessageFingerprint: "after"},
+		{LineNumber: 6, Type: loganalysis.EventUnknown, Severity: loganalysis.SeverityUnknown, Source: "unknown", ParseStatus: "unknown_time", MessageFingerprint: "unknown-time"},
+	}
+	if err := repository.InsertBatch(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveSummary(context.Background(), loganalysis.Summary{TotalLines: 6, RecognizedEvents: 5, UnknownLines: 1, FirstObservedAt: &from, LastObservedAt: &after}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := repository.Evidence(context.Background(), LogQuery{From: &from, To: &to, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 3 || len(result.Items) != 1 || result.Items[0].LineNumber != 4 {
+		t.Fatalf("evidence=%+v", result)
+	}
+	wantTypes := []loganalysis.EvidenceCount{{Name: "nospace", Count: 2}, {Name: "compaction", Count: 1}}
+	if !reflect.DeepEqual(result.ByEventType, wantTypes) {
+		t.Fatalf("event counts=%+v want=%+v", result.ByEventType, wantTypes)
+	}
+	if result.BySeverity[0].Name != "WARN" || result.BySeverity[0].Count != 2 || result.BySource[0].Name != "mvcc" || result.BySource[0].Count != 2 {
+		t.Fatalf("severity=%+v source=%+v", result.BySeverity, result.BySource)
+	}
+
+	next, err := repository.Evidence(context.Background(), LogQuery{From: &to, To: &after, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Total != 1 || next.Items[0].LineNumber != 5 {
+		t.Fatalf("adjacent evidence=%+v", next)
 	}
 }
