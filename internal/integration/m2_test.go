@@ -99,7 +99,10 @@ func TestM2RecordsCorruptedBboltErrorCode(t *testing.T) {
 
 func waitForStatus(t *testing.T, application *app.Application, id string, status task.Status) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	// Analysis stages use filesystem-backed SQLite and can take several seconds
+	// on slower CI runners, especially Windows. Keep polling responsive while
+	// allowing the asynchronous task enough time to reach its terminal state.
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		got, err := application.Get(context.Background(), id)
 		if err != nil {
