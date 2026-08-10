@@ -54,6 +54,8 @@ progress { width: 7rem; accent-color: #276448; }
 .check input { min-width: auto; }
 .drawer { margin-top: 1rem; padding: 1rem; border: 1px solid #aab7ad; border-radius: .65rem; background: #f8faf8; }
 .hash { overflow-wrap: anywhere; color: #526158; font-family: ui-monospace, monospace; }
+.evidence-hash { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+.evidence-meta { color: #526158; }
 code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 @media (max-width: 900px) { .task-form { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px) { .metrics, .filters { grid-template-columns: 1fr 1fr; } }
