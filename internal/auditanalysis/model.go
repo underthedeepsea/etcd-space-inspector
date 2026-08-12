@@ -37,13 +37,14 @@ type Event struct {
 
 // Summary is the aggregate result of one Audit scan.
 type Summary struct {
-	TotalLines      int64      `json:"totalLines"`
-	ValidEvents     int64      `json:"validEvents"`
-	WriteEvents     int64      `json:"writeEvents"`
-	UnknownLines    int64      `json:"unknownLines"`
-	ParseErrors     int64      `json:"parseErrors"`
-	FirstObservedAt *time.Time `json:"firstObservedAt,omitempty"`
-	LastObservedAt  *time.Time `json:"lastObservedAt,omitempty"`
+	TotalLines         int64      `json:"totalLines"`
+	ValidEvents        int64      `json:"validEvents"`
+	WriteEvents        int64      `json:"writeEvents"`
+	UnknownLines       int64      `json:"unknownLines"`
+	ParseErrors        int64      `json:"parseErrors"`
+	DeduplicatedEvents int64      `json:"deduplicatedEvents"`
+	FirstObservedAt    *time.Time `json:"firstObservedAt,omitempty"`
+	LastObservedAt     *time.Time `json:"lastObservedAt,omitempty"`
 }
 
 // AggregateCount is one stable whole-window aggregate bucket.
