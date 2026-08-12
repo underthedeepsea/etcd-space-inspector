@@ -142,6 +142,22 @@ func TestServiceCreatesAuditTaskWithoutDatabaseVersionDetection(t *testing.T) {
 	}
 }
 
+func TestServiceCreatesMetricsTaskWithoutDatabaseVersionDetection(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "metrics.json")
+	if err := os.WriteFile(source, []byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(filepath.Join(root, "data"))
+	created, err := svc.Create(context.Background(), CreateRequest{Name: "metrics", SourcePath: source, InputType: "metrics", MaxInputBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.InputType != "metrics" || created.SourcePath != "source/input.metrics" || created.SchemaVersion != 4 || created.EtcdVersion != "" || created.EtcdVersionSource != VersionSourceUnknown || created.DetectedEtcdVersion != "" {
+		t.Fatalf("created=%+v", created)
+	}
+}
+
 func TestServiceRejectsUnknownInputType(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "input")
@@ -149,7 +165,7 @@ func TestServiceRejectsUnknownInputType(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := NewService(filepath.Join(root, "data")).Create(context.Background(), CreateRequest{
-		Name: "unknown", SourcePath: source, InputType: "metrics", MaxInputBytes: 1024,
+		Name: "unknown", SourcePath: source, InputType: "trace", MaxInputBytes: 1024,
 	})
 	if err == nil {
 		t.Fatal("expected unknown input type error")

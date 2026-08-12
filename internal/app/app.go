@@ -255,6 +255,9 @@ func (a *Application) stagesFor(item task.Task) []task.Stage {
 	if item.InputType == "audit" {
 		return []task.Stage{AuditStage(a.manifests, a.diffBatchSize)}
 	}
+	if item.InputType == "metrics" {
+		return []task.Stage{MetricsStage(a.manifests, a.diffBatchSize)}
+	}
 	return a.stages
 }
 
@@ -299,7 +302,7 @@ func (a *Application) RecoverInterrupted(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if item.InputType != "log" && item.InputType != "audit" {
+		if item.InputType != "log" && item.InputType != "audit" && item.InputType != "metrics" {
 			if err := storage.NewKubeRepository(db, item.ID).EnsureUnavailable(ctx); err != nil {
 				db.Close()
 				return err

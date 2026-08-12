@@ -31,8 +31,8 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Task, erro
 	if strings.TrimSpace(request.Name) == "" {
 		return Task{}, fmt.Errorf("task name is required")
 	}
-	if request.InputType != "snapshot" && request.InputType != "raw-db" && request.InputType != "log" && request.InputType != "audit" {
-		return Task{}, fmt.Errorf("input type must be snapshot, raw-db, log, or audit")
+	if request.InputType != "snapshot" && request.InputType != "raw-db" && request.InputType != "log" && request.InputType != "audit" && request.InputType != "metrics" {
+		return Task{}, fmt.Errorf("input type must be snapshot, raw-db, log, audit, or metrics")
 	}
 	id, err := newID()
 	if err != nil {
@@ -60,6 +60,8 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Task, erro
 		destinationName = "input.log"
 	} else if request.InputType == "audit" {
 		destinationName = "input.audit"
+	} else if request.InputType == "metrics" {
+		destinationName = "input.metrics"
 	}
 	destination := filepath.Join(dir, "source", destinationName)
 	meta, err := ingest.Copy(ctx, request.SourcePath, destination, request.MaxInputBytes)
@@ -67,7 +69,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Task, erro
 		return Task{}, fmt.Errorf("import task source: %w", err)
 	}
 	detected := etcdversion.Result{}
-	if request.InputType != "log" && request.InputType != "audit" {
+	if request.InputType != "log" && request.InputType != "audit" && request.InputType != "metrics" {
 		detected = etcdversion.Detect(destination)
 	}
 	provided := strings.TrimSpace(request.EtcdVersion)
@@ -76,6 +78,8 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Task, erro
 		schemaVersion = 2
 	} else if request.InputType == "audit" {
 		schemaVersion = 3
+	} else if request.InputType == "metrics" {
+		schemaVersion = 4
 	}
 	created := Task{
 		ID:                  id,

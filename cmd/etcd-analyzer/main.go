@@ -232,8 +232,8 @@ func loopbackAddress(address string) bool {
 func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("analyze", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	input := flags.String("input", "", "snapshot, raw database, log, or Audit path")
-	inputType := flags.String("type", "snapshot", "snapshot, raw-db, log, or audit")
+	input := flags.String("input", "", "snapshot, raw database, log, Audit, or Prometheus metrics path")
+	inputType := flags.String("type", "snapshot", "snapshot, raw-db, log, audit, or metrics")
 	output := flags.String("output", "./analysis-data", "analysis data directory")
 	etcdVersion := flags.String("etcd-version", "", "source etcd version")
 	name := flags.String("name", "", "task name")
@@ -288,6 +288,8 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 		stages = []task.Stage{app.LogStage(manifests, settings.Analysis.SQLiteBatchSize)}
 	} else if item.InputType == "audit" {
 		stages = []task.Stage{app.AuditStage(manifests, settings.Analysis.SQLiteBatchSize)}
+	} else if item.InputType == "metrics" {
+		stages = []task.Stage{app.MetricsStage(manifests, settings.Analysis.SQLiteBatchSize)}
 	} else {
 		stages = []task.Stage{
 			app.PhysicalStage(manifests, settings.Analysis.SQLiteBatchSize),

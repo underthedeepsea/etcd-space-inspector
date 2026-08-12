@@ -166,6 +166,29 @@ func TestRunAnalyzeAuditTask(t *testing.T) {
 	}
 }
 
+func TestRunAnalyzeMetricsTask(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "metrics.json")
+	input := `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"etcd_mvcc_db_total_size_in_bytes","instance":"m1"},"values":[[1,"10"]]}]}}`
+	if err := os.WriteFile(source, []byte(input), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "data")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"analyze", "--input", source, "--type", "metrics", "--output", output}, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), "completed") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	manifests, _ := filepath.Glob(filepath.Join(output, "tasks", "*", "manifest.json"))
+	manifest, err := os.ReadFile(manifests[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(manifest, []byte(`"inputFile": "source/input.metrics"`)) || !bytes.Contains(manifest, []byte(`"currentStage": "completed"`)) {
+		t.Fatalf("manifest=%s", manifest)
+	}
+}
+
 func TestRunRejectsUnknownCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"unknown"}, &stdout, &stderr); code != 2 {
