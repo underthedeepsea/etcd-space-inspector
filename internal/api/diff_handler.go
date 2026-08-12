@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"etcd-analyzer/internal/auditanalysis"
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/loganalysis"
 	"etcd-analyzer/internal/storage"
@@ -148,9 +149,45 @@ func (s *server) handleDiff(writer http.ResponseWriter, request *http.Request, r
 		s.handleDiffAggregates(writer, request, id, resource)
 	case "log-evidence":
 		s.handleDiffLogEvidence(writer, request, id)
+	case "audit-evidence":
+		s.handleDiffAuditEvidence(writer, request, id)
 	default:
 		writeError(writer, http.StatusNotFound, "NOT_FOUND", "comparison resource not found")
 	}
+}
+
+func (s *server) handleDiffAuditEvidence(writer http.ResponseWriter, request *http.Request, diffID string) {
+	taskID, query, page, pageSize, err := parseDiffAuditEvidenceQuery(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid Audit evidence query")
+		return
+	}
+	result, err := s.dependencies.Diffs.DiffAuditEvidence(request.Context(), diffID, taskID, query)
+	if err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	if result.Candidates == nil {
+		result.Candidates = []auditanalysis.Candidate{}
+	}
+	if result.Items == nil {
+		result.Items = []auditanalysis.Event{}
+	}
+	result.Page, result.PageSize = page, pageSize
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func parseDiffAuditEvidenceQuery(request *http.Request) (string, storage.AuditQuery, int, int, error) {
+	values := request.URL.Query()
+	taskIDs := values["auditTaskId"]
+	if len(taskIDs) != 1 || !validEvidenceTaskID(taskIDs[0]) {
+		return "", storage.AuditQuery{}, 0, 0, fmt.Errorf("one safe auditTaskId is required")
+	}
+	page, pageSize, err := pagination(request, 100)
+	if err != nil {
+		return "", storage.AuditQuery{}, 0, 0, err
+	}
+	return taskIDs[0], storage.AuditQuery{Limit: pageSize, Offset: (page - 1) * pageSize}, page, pageSize, nil
 }
 
 func (s *server) handleDiffObjects(writer http.ResponseWriter, request *http.Request, id string) {

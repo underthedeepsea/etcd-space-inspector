@@ -65,16 +65,38 @@ const (
 
 // Candidate is a normalized writer candidate used by later diff matching.
 type Candidate struct {
-	Username           string     `json:"username"`
-	HighestMatchLevel  MatchLevel `json:"highestMatchLevel"`
-	ExactObjectMatches int        `json:"exactObjectMatches"`
-	Writes             int        `json:"writes"`
+	Username            string     `json:"username"`
+	UsernameHash        string     `json:"usernameHash"`
+	UserAgent           string     `json:"userAgent"`
+	UserAgentHash       string     `json:"userAgentHash"`
+	SourceNetwork       string     `json:"sourceNetwork"`
+	SourceIPHash        string     `json:"sourceIpHash"`
+	HighestMatchLevel   MatchLevel `json:"highestMatchLevel"`
+	ExactObjectMatches  int        `json:"exactObjectMatches"`
+	ResourceMatches     int        `json:"resourceMatches"`
+	NamespaceMatches    int        `json:"namespaceMatches"`
+	Writes              int        `json:"writes"`
+	RequestObjectBytes  int64      `json:"requestObjectBytes"`
+	ResponseObjectBytes int64      `json:"responseObjectBytes"`
 }
 
 // Evidence is a read-only correlation response populated by the application layer.
 type Evidence struct {
-	Candidates          []Candidate `json:"candidates"`
+	DiffID              string      `json:"diffId"`
+	AuditTaskID         string      `json:"auditTaskId"`
+	AuditTaskName       string      `json:"auditTaskName"`
+	AuditTaskSHA256     string      `json:"auditTaskSha256"`
+	From                time.Time   `json:"from"`
+	To                  time.Time   `json:"to"`
+	WindowSeconds       int64       `json:"windowSeconds"`
+	Coverage            string      `json:"coverage"`
 	SourceCompatibility string      `json:"sourceCompatibility"`
+	ObjectsAvailable    bool        `json:"objectsAvailable"`
+	Candidates          []Candidate `json:"candidates"`
+	Items               []Event     `json:"items"`
+	Total               int         `json:"total"`
+	Page                int         `json:"page"`
+	PageSize            int         `json:"pageSize"`
 }
 
 // EventSink receives one normalized event at a time.

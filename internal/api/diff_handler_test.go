@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"etcd-analyzer/internal/apperr"
+	"etcd-analyzer/internal/auditanalysis"
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/loganalysis"
 	"etcd-analyzer/internal/storage"
@@ -179,24 +180,29 @@ func TestDiffLogEvidenceMapsStableErrors(t *testing.T) {
 }
 
 type fakeDiffService struct {
-	created        domain.CreateRequest
-	items          []domain.Comparison
-	summary        domain.Summary
-	keys           storage.DiffKeyResult
-	prefixes       []domain.PrefixDelta
-	resources      []domain.ResourceDelta
-	namespaces     []domain.NamespaceDelta
-	objects        storage.DiffObjectResult
-	objectQuery    storage.DiffObjectQuery
-	keyQuery       storage.DiffKeyQuery
-	deltaQuery     storage.DiffDeltaQuery
-	evidence       loganalysis.DiffEvidence
-	evidenceErr    error
-	evidenceDiffID string
-	evidenceTaskID string
-	evidenceQuery  storage.LogQuery
-	cancelled      bool
-	deleted        bool
+	created             domain.CreateRequest
+	items               []domain.Comparison
+	summary             domain.Summary
+	keys                storage.DiffKeyResult
+	prefixes            []domain.PrefixDelta
+	resources           []domain.ResourceDelta
+	namespaces          []domain.NamespaceDelta
+	objects             storage.DiffObjectResult
+	objectQuery         storage.DiffObjectQuery
+	keyQuery            storage.DiffKeyQuery
+	deltaQuery          storage.DiffDeltaQuery
+	evidence            loganalysis.DiffEvidence
+	auditEvidence       auditanalysis.Evidence
+	auditEvidenceErr    error
+	evidenceErr         error
+	evidenceDiffID      string
+	evidenceTaskID      string
+	evidenceQuery       storage.LogQuery
+	auditEvidenceDiffID string
+	auditEvidenceTaskID string
+	auditEvidenceQuery  storage.AuditQuery
+	cancelled           bool
+	deleted             bool
 }
 
 func (f *fakeDiffService) CreateDiff(_ context.Context, request domain.CreateRequest) (domain.Comparison, error) {
@@ -240,4 +246,36 @@ func (f *fakeDiffService) DiffObjects(_ context.Context, _ string, query storage
 func (f *fakeDiffService) DiffLogEvidence(_ context.Context, diffID, taskID string, query storage.LogQuery) (loganalysis.DiffEvidence, error) {
 	f.evidenceDiffID, f.evidenceTaskID, f.evidenceQuery = diffID, taskID, query
 	return f.evidence, f.evidenceErr
+}
+func (f *fakeDiffService) DiffAuditEvidence(_ context.Context, diffID, taskID string, query storage.AuditQuery) (auditanalysis.Evidence, error) {
+	f.auditEvidenceDiffID, f.auditEvidenceTaskID, f.auditEvidenceQuery = diffID, taskID, query
+	return f.auditEvidence, f.auditEvidenceErr
+}
+
+func TestDiffAuditEvidenceRouteAndValidation(t *testing.T) {
+	service := &fakeDiffService{auditEvidence: auditanalysis.Evidence{DiffID: "d1", AuditTaskID: "audit-1", SourceCompatibility: "unverified"}}
+	handler := New(Dependencies{Diffs: service})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/diffs/d1/audit-evidence?auditTaskId=audit-1&page=2&pageSize=20", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if service.auditEvidenceDiffID != "d1" || service.auditEvidenceTaskID != "audit-1" || service.auditEvidenceQuery.Limit != 20 || service.auditEvidenceQuery.Offset != 20 {
+		t.Fatalf("service=%+v", service)
+	}
+	if !strings.Contains(recorder.Body.String(), `"candidates":[]`) || !strings.Contains(recorder.Body.String(), `"items":[]`) || !strings.Contains(recorder.Body.String(), `"page":2`) {
+		t.Fatalf("body=%s", recorder.Body.String())
+	}
+	for _, path := range []string{"/api/v1/diffs/d1/audit-evidence", "/api/v1/diffs/d1/audit-evidence?auditTaskId=a&auditTaskId=b", "/api/v1/diffs/d1/audit-evidence?auditTaskId=a%2Fb", "/api/v1/diffs/d1/audit-evidence?auditTaskId=a&pageSize=501"} {
+		recorder = httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("path=%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/diffs/d1/audit-evidence?auditTaskId=a", nil))
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status=%d", recorder.Code)
+	}
 }
