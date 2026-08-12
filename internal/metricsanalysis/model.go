@@ -46,3 +46,11 @@ type Summary struct {
 	InstanceCount     int          `json:"instanceCount"`
 	MetricTypes       []MetricType `json:"metricTypes"`
 }
+
+// Timeline is the browser-safe view of one filtered metrics window.
+type Timeline struct {
+	Summary Summary         `json:"summary"`
+	Series  []SeriesSamples `json:"series"`
+	Total   int             `json:"total"`
+	Curves  []Curve         `json:"curves"`
+}

@@ -111,6 +111,11 @@ func AnalyzeWindow(input WindowInput) Evidence {
 	return result
 }
 
+// BuildCurves returns bounded aggregate curves for a filtered metrics window.
+func BuildCurves(input WindowInput) []Curve {
+	return AnalyzeWindow(input).Curves
+}
+
 func samplesInWindow(input WindowInput, metric MetricType) []SeriesSamples {
 	result := make([]SeriesSamples, 0)
 	for _, series := range input.Series {

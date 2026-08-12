@@ -32,6 +32,12 @@ type MetricsData struct {
 	Total   int                      `json:"total"`
 }
 
+// MetricsSeriesPage contains complete samples for a page of matching series.
+type MetricsSeriesPage struct {
+	Series []metricsanalysis.SeriesSamples
+	Total  int
+}
+
 type MetricsRepository struct {
 	db     *sql.DB
 	taskID string
@@ -214,4 +220,118 @@ FROM metric_samples s JOIN metric_series r ON r.series_id=s.series_id WHERE `+cl
 	}
 	result.Summary, err = r.Summary(ctx)
 	return result, err
+}
+
+// SeriesPage pages series while retaining every sample in the filtered window.
+func (r *MetricsRepository) SeriesPage(ctx context.Context, query MetricsQuery) (MetricsSeriesPage, error) {
+	if query.Limit <= 0 || query.Limit > 500 {
+		query.Limit = 100
+	}
+	if query.Offset < 0 {
+		query.Offset = 0
+	}
+	return r.seriesSamples(ctx, query, true)
+}
+
+// Window returns every matching series for aggregate curve computation.
+func (r *MetricsRepository) Window(ctx context.Context, query MetricsQuery) ([]metricsanalysis.SeriesSamples, error) {
+	page, err := r.seriesSamples(ctx, query, false)
+	return page.Series, err
+}
+
+func (r *MetricsRepository) seriesSamples(ctx context.Context, query MetricsQuery, paged bool) (MetricsSeriesPage, error) {
+	where := []string{"r.task_id=?"}
+	args := []any{r.taskID}
+	if query.MetricType != "" {
+		where = append(where, "r.metric_type=?")
+		args = append(args, query.MetricType)
+	}
+	if query.Instance != "" {
+		where = append(where, "r.instance=?")
+		args = append(args, query.Instance)
+	}
+	if query.From != nil {
+		where = append(where, "s.observed_at>=?")
+		args = append(args, formatTime(*query.From))
+	}
+	if query.To != nil {
+		where = append(where, "s.observed_at<=?")
+		args = append(args, formatTime(*query.To))
+	}
+	clause := strings.Join(where, " AND ")
+	var result MetricsSeriesPage
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT r.series_id) FROM metric_series r JOIN metric_samples s ON s.series_id=r.series_id WHERE `+clause, args...).Scan(&result.Total); err != nil {
+		return result, fmt.Errorf("count metric series: %w", err)
+	}
+	statement := `SELECT r.series_id,r.metric_type,r.source_metric_name,r.instance,r.job,r.member_id,r.series_hash,r.histogram_le
+FROM metric_series r JOIN metric_samples s ON s.series_id=r.series_id WHERE ` + clause + ` GROUP BY r.series_id ORDER BY r.series_id`
+	selectArgs := append([]any(nil), args...)
+	if paged {
+		statement += ` LIMIT ? OFFSET ?`
+		selectArgs = append(selectArgs, query.Limit, query.Offset)
+	}
+	rows, err := r.db.QueryContext(ctx, statement, selectArgs...)
+	if err != nil {
+		return result, fmt.Errorf("select metric series page: %w", err)
+	}
+	type identified struct {
+		id     int64
+		series metricsanalysis.Series
+	}
+	var selected []identified
+	for rows.Next() {
+		var item identified
+		var histogram sql.NullFloat64
+		if err := rows.Scan(&item.id, &item.series.MetricType, &item.series.SourceMetricName, &item.series.Instance, &item.series.Job, &item.series.MemberID, &item.series.SeriesHash, &histogram); err != nil {
+			rows.Close()
+			return result, fmt.Errorf("scan metric series: %w", err)
+		}
+		if histogram.Valid {
+			value := histogram.Float64
+			item.series.HistogramLE = &value
+		}
+		selected = append(selected, item)
+	}
+	if err := rows.Close(); err != nil {
+		return result, err
+	}
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+	for _, item := range selected {
+		sampleWhere := []string{"task_id=?", "series_id=?"}
+		sampleArgs := []any{r.taskID, item.id}
+		if query.From != nil {
+			sampleWhere = append(sampleWhere, "observed_at>=?")
+			sampleArgs = append(sampleArgs, formatTime(*query.From))
+		}
+		if query.To != nil {
+			sampleWhere = append(sampleWhere, "observed_at<=?")
+			sampleArgs = append(sampleArgs, formatTime(*query.To))
+		}
+		sampleRows, err := r.db.QueryContext(ctx, `SELECT observed_at,value FROM metric_samples WHERE `+strings.Join(sampleWhere, " AND ")+` ORDER BY observed_at`, sampleArgs...)
+		if err != nil {
+			return result, fmt.Errorf("select metric samples: %w", err)
+		}
+		series := metricsanalysis.SeriesSamples{Series: item.series}
+		for sampleRows.Next() {
+			var observed string
+			var sample metricsanalysis.Sample
+			if err := sampleRows.Scan(&observed, &sample.Value); err != nil {
+				sampleRows.Close()
+				return result, err
+			}
+			sample.ObservedAt, err = time.Parse(time.RFC3339Nano, observed)
+			if err != nil {
+				sampleRows.Close()
+				return result, err
+			}
+			series.Samples = append(series.Samples, sample)
+		}
+		if err := sampleRows.Close(); err != nil {
+			return result, err
+		}
+		result.Series = append(result.Series, series)
+	}
+	return result, nil
 }
