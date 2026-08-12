@@ -61,6 +61,7 @@ type DiffService interface {
 	DeleteDiff(string) error
 	DiffOverview(context.Context, string) (domain.Summary, error)
 	DiffKeys(context.Context, string, storage.DiffKeyQuery) (storage.DiffKeyResult, error)
+	DiffObjects(context.Context, string, storage.DiffObjectQuery) (storage.DiffObjectResult, error)
 	DiffPrefixes(context.Context, string, storage.DiffDeltaQuery) ([]domain.PrefixDelta, error)
 	DiffResources(context.Context, string, storage.DiffDeltaQuery) ([]domain.ResourceDelta, error)
 	DiffNamespaces(context.Context, string, storage.DiffDeltaQuery) ([]domain.NamespaceDelta, error)

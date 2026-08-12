@@ -193,3 +193,57 @@ func TestDiffRepositoryPersistsAggregateDeltas(t *testing.T) {
 		t.Fatalf("namespaces=%+v err=%v", namespaces, err)
 	}
 }
+
+func TestDiffRepositoryQueriesObjectsWithFiltersAndStablePagination(t *testing.T) {
+	db, err := OpenDiff(filepath.Join(t.TempDir(), "diff.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewDiffRepository(db)
+	items := []domain.ObjectDelta{
+		{KeyHash: "a", APIGroup: "apps", Resource: "deployments", Namespace: "prod", DisplayName: "api", ChangeType: domain.ChangeModified, CurrentBytesDelta: 20, HistoricalBytesDelta: 10, RevisionCountDelta: 2, TotalBytesDelta: 30},
+		{KeyHash: "b", Resource: "secrets", Namespace: "prod", DisplayName: "redacted:b", ChangeType: domain.ChangeAdded, CurrentBytesDelta: 40, RevisionCountDelta: 1, TotalBytesDelta: 40},
+		{KeyHash: "c", Resource: "pods", Namespace: "default", DisplayName: "pod", ChangeType: domain.ChangeDeleted, CurrentBytesDelta: -10, RevisionCountDelta: -1, TotalBytesDelta: -10},
+	}
+	if err := repo.StoreObjects(context.Background(), items); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Objects(context.Background(), DiffObjectQuery{ChangeType: domain.ChangeModified, APIGroup: "apps", Resource: "deployments", Namespace: "prod", Sort: "total_bytes", Desc: true, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ObjectsAvailable || got.Total != 1 || len(got.Items) != 1 || got.Items[0].KeyHash != "a" {
+		t.Fatalf("got=%+v", got)
+	}
+	if _, err := repo.Objects(context.Background(), DiffObjectQuery{Sort: "raw_sql", Limit: 10}); err == nil {
+		t.Fatal("unsafe sort accepted")
+	}
+}
+
+func TestDiffRepositoryReportsObjectsUnavailableForLegacyReadOnlyDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(legacyDiffSummarySchema + `; INSERT INTO diff_summary (singleton,baseline_task_id,target_task_id) VALUES (1,'base','target')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readOnly, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	repo := NewDiffRepository(readOnly)
+	got, err := repo.Objects(context.Background(), DiffObjectQuery{Sort: "total_bytes", Limit: 10})
+	if err != nil || got.ObjectsAvailable || got.Items == nil || len(got.Items) != 0 {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	if summary, err := repo.Summary(context.Background()); err != nil || summary.BaselineTaskID != "base" {
+		t.Fatalf("summary=%+v err=%v", summary, err)
+	}
+}

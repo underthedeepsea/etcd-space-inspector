@@ -24,6 +24,7 @@ func TestDiffRoutesAndQueries(t *testing.T) {
 		prefixes:   []domain.PrefixDelta{{Prefix: "/registry", TotalBytesDelta: 100}},
 		resources:  []domain.ResourceDelta{{APIGroup: "apps", Resource: "deployments", TotalBytesDelta: 100}},
 		namespaces: []domain.NamespaceDelta{{Namespace: "prod", TotalBytesDelta: 100}},
+		objects:    storage.DiffObjectResult{Items: []domain.ObjectDelta{{KeyHash: "object", Resource: "deployments", Namespace: "prod", DisplayName: "api", ChangeType: domain.ChangeModified, TotalBytesDelta: 100}}, Total: 1, ObjectsAvailable: true},
 	}
 	handler := New(Dependencies{Diffs: service})
 
@@ -45,6 +46,7 @@ func TestDiffRoutesAndQueries(t *testing.T) {
 		"/api/v1/diffs/d1/prefixes?order=desc&limit=20",
 		"/api/v1/diffs/d1/resources?order=desc&limit=20",
 		"/api/v1/diffs/d1/namespaces?order=asc&limit=20",
+		"/api/v1/diffs/d1/objects?changeType=modified&apiGroup=apps&resource=deployments&namespace=prod&sort=total_bytes&order=desc&page=2&pageSize=20",
 	}
 	for _, path := range paths {
 		recorder = httptest.NewRecorder()
@@ -58,6 +60,9 @@ func TestDiffRoutesAndQueries(t *testing.T) {
 	}
 	if service.deltaQuery.Limit != 20 {
 		t.Fatalf("delta query=%+v", service.deltaQuery)
+	}
+	if service.objectQuery.ChangeType != domain.ChangeModified || service.objectQuery.APIGroup != "apps" || service.objectQuery.Resource != "deployments" || service.objectQuery.Namespace != "prod" || service.objectQuery.Offset != 20 || service.objectQuery.Limit != 20 || !service.objectQuery.Desc {
+		t.Fatalf("object query=%+v", service.objectQuery)
 	}
 
 	recorder = httptest.NewRecorder()
@@ -89,6 +94,9 @@ func TestDiffRoutesRejectInvalidInput(t *testing.T) {
 		{method: http.MethodGet, path: "/api/v1/diffs/d1/keys?pageSize=501"},
 		{method: http.MethodGet, path: "/api/v1/diffs/d1/prefixes?limit=501"},
 		{method: http.MethodGet, path: "/api/v1/diffs/d1/resources?order=random"},
+		{method: http.MethodGet, path: "/api/v1/diffs/d1/objects?changeType=unknown"},
+		{method: http.MethodGet, path: "/api/v1/diffs/d1/objects?sort=raw_sql"},
+		{method: http.MethodGet, path: "/api/v1/diffs/d1/objects?pageSize=501"},
 	}
 	for _, test := range tests {
 		recorder := httptest.NewRecorder()
@@ -178,6 +186,8 @@ type fakeDiffService struct {
 	prefixes       []domain.PrefixDelta
 	resources      []domain.ResourceDelta
 	namespaces     []domain.NamespaceDelta
+	objects        storage.DiffObjectResult
+	objectQuery    storage.DiffObjectQuery
 	keyQuery       storage.DiffKeyQuery
 	deltaQuery     storage.DiffDeltaQuery
 	evidence       loganalysis.DiffEvidence
@@ -222,6 +232,10 @@ func (f *fakeDiffService) DiffResources(_ context.Context, _ string, query stora
 func (f *fakeDiffService) DiffNamespaces(_ context.Context, _ string, query storage.DiffDeltaQuery) ([]domain.NamespaceDelta, error) {
 	f.deltaQuery = query
 	return f.namespaces, nil
+}
+func (f *fakeDiffService) DiffObjects(_ context.Context, _ string, query storage.DiffObjectQuery) (storage.DiffObjectResult, error) {
+	f.objectQuery = query
+	return f.objects, nil
 }
 func (f *fakeDiffService) DiffLogEvidence(_ context.Context, diffID, taskID string, query storage.LogQuery) (loganalysis.DiffEvidence, error) {
 	f.evidenceDiffID, f.evidenceTaskID, f.evidenceQuery = diffID, taskID, query

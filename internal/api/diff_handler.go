@@ -142,6 +142,8 @@ func (s *server) handleDiff(writer http.ResponseWriter, request *http.Request, r
 		writeJSON(writer, http.StatusOK, item)
 	case "keys":
 		s.handleDiffKeys(writer, request, id)
+	case "objects":
+		s.handleDiffObjects(writer, request, id)
 	case "prefixes", "resources", "namespaces":
 		s.handleDiffAggregates(writer, request, id, resource)
 	case "log-evidence":
@@ -149,6 +151,53 @@ func (s *server) handleDiff(writer http.ResponseWriter, request *http.Request, r
 	default:
 		writeError(writer, http.StatusNotFound, "NOT_FOUND", "comparison resource not found")
 	}
+}
+
+func (s *server) handleDiffObjects(writer http.ResponseWriter, request *http.Request, id string) {
+	query, page, pageSize, err := parseDiffObjectQuery(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid comparison object query")
+		return
+	}
+	result, err := s.dependencies.Diffs.DiffObjects(request.Context(), id, query)
+	if err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	if result.Items == nil {
+		result.Items = []domain.ObjectDelta{}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"items": result.Items, "total": result.Total, "objectsAvailable": result.ObjectsAvailable, "page": page, "pageSize": pageSize})
+}
+
+func parseDiffObjectQuery(request *http.Request) (storage.DiffObjectQuery, int, int, error) {
+	values := request.URL.Query()
+	page, pageSize, err := pagination(request, 100)
+	if err != nil {
+		return storage.DiffObjectQuery{}, 0, 0, err
+	}
+	change := domain.ChangeType(values.Get("changeType"))
+	if change != "" && change != domain.ChangeAdded && change != domain.ChangeDeleted && change != domain.ChangeModified {
+		return storage.DiffObjectQuery{}, 0, 0, fmt.Errorf("invalid change type")
+	}
+	sortName := values.Get("sort")
+	if sortName == "" {
+		sortName = "total_bytes"
+	}
+	allowed := map[string]bool{"object": true, "total_bytes": true, "current_bytes": true, "historical_bytes": true, "revision_count": true}
+	if !allowed[sortName] {
+		return storage.DiffObjectQuery{}, 0, 0, fmt.Errorf("invalid sort")
+	}
+	order := values.Get("order")
+	if order != "" && order != "asc" && order != "desc" {
+		return storage.DiffObjectQuery{}, 0, 0, fmt.Errorf("invalid order")
+	}
+	for _, value := range []string{values.Get("apiGroup"), values.Get("resource"), values.Get("namespace")} {
+		if !validAuditDisplayFilter(value) {
+			return storage.DiffObjectQuery{}, 0, 0, fmt.Errorf("invalid filter")
+		}
+	}
+	return storage.DiffObjectQuery{ChangeType: change, APIGroup: values.Get("apiGroup"), Resource: values.Get("resource"), Namespace: values.Get("namespace"), Sort: sortName, Desc: order == "desc" || order == "" && sortName != "object", Limit: pageSize, Offset: (page - 1) * pageSize}, page, pageSize, nil
 }
 
 func (s *server) handleDiffKeys(writer http.ResponseWriter, request *http.Request, id string) {

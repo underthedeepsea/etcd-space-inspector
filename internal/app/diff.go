@@ -226,6 +226,16 @@ func (a *Application) DiffKeys(ctx context.Context, id string, query storage.Dif
 	return repository.Keys(ctx, query)
 }
 
+// DiffObjects returns one filtered page of Kubernetes object deltas.
+func (a *Application) DiffObjects(ctx context.Context, id string, query storage.DiffObjectQuery) (storage.DiffObjectResult, error) {
+	repository, closeDatabase, err := a.diffRepository(ctx, id)
+	if err != nil {
+		return storage.DiffObjectResult{}, err
+	}
+	defer closeDatabase()
+	return repository.Objects(ctx, query)
+}
+
 // DiffPrefixes returns sorted Prefix deltas.
 func (a *Application) DiffPrefixes(ctx context.Context, id string, query storage.DiffDeltaQuery) ([]domain.PrefixDelta, error) {
 	repository, closeDatabase, err := a.diffRepository(ctx, id)

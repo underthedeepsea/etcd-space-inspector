@@ -18,6 +18,7 @@ type Sink interface {
 	StorePrefixes(context.Context, []PrefixDelta) error
 	StoreResources(context.Context, []ResourceDelta) error
 	StoreNamespaces(context.Context, []NamespaceDelta) error
+	StoreObjects(context.Context, []ObjectDelta) error
 }
 
 // Calculator performs ordered, bounded comparisons of two task databases.
@@ -68,6 +69,9 @@ func (c *Calculator) Compare(ctx context.Context, baselineDB, targetDB *sql.DB, 
 		}
 	}
 	if kubernetesAvailable {
+		if err := c.compareObjects(ctx, baselineDB, targetDB, sink); err != nil {
+			return err
+		}
 		if err := c.compareResources(ctx, baselineDB, targetDB, sink); err != nil {
 			return err
 		}
@@ -76,6 +80,101 @@ func (c *Calculator) Compare(ctx context.Context, baselineDB, targetDB *sql.DB, 
 		}
 	}
 	return nil
+}
+
+type objectState struct {
+	hash, group, resource, namespace, display string
+	present                                   bool
+	current, historical, revisions            int64
+}
+
+func (c *Calculator) compareObjects(ctx context.Context, baselineDB, targetDB *sql.DB, sink Sink) error {
+	query := `SELECT key_hash,api_group,resource,namespace,display_name,present,current_bytes,historical_bytes,revision_count FROM kube_object_records ORDER BY key_hash`
+	baselineRows, err := baselineDB.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("select baseline objects: %w", err)
+	}
+	defer baselineRows.Close()
+	targetRows, err := targetDB.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("select target objects: %w", err)
+	}
+	defer targetRows.Close()
+	baseline, hasBaseline, err := nextObject(baselineRows)
+	if err != nil {
+		return err
+	}
+	target, hasTarget, err := nextObject(targetRows)
+	if err != nil {
+		return err
+	}
+	batch := make([]ObjectDelta, 0, c.batchSize)
+	for hasBaseline || hasTarget {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var item ObjectDelta
+		switch {
+		case !hasBaseline || hasTarget && target.hash < baseline.hash:
+			change := ChangeAdded
+			if !target.present {
+				change = ChangeDeleted
+			}
+			item = objectDelta(objectState{}, target, change)
+			target, hasTarget, err = nextObject(targetRows)
+		case !hasTarget || baseline.hash < target.hash:
+			item = objectDelta(baseline, objectState{}, ChangeDeleted)
+			baseline, hasBaseline, err = nextObject(baselineRows)
+		default:
+			change := ChangeModified
+			if baseline.present && !target.present {
+				change = ChangeDeleted
+			} else if !baseline.present && target.present {
+				change = ChangeAdded
+			}
+			item = objectDelta(baseline, target, change)
+			baseline, hasBaseline, err = nextObject(baselineRows)
+			if err == nil {
+				target, hasTarget, err = nextObject(targetRows)
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if item.ChangeType == ChangeModified && item.CurrentBytesDelta == 0 && item.HistoricalBytesDelta == 0 && item.RevisionCountDelta == 0 {
+			continue
+		}
+		batch = append(batch, item)
+		if len(batch) == c.batchSize {
+			if err := sink.StoreObjects(ctx, batch); err != nil {
+				return err
+			}
+			batch = batch[:0]
+		}
+	}
+	if len(batch) > 0 {
+		return sink.StoreObjects(ctx, batch)
+	}
+	return nil
+}
+
+func nextObject(rows *sql.Rows) (objectState, bool, error) {
+	if !rows.Next() {
+		return objectState{}, false, rows.Err()
+	}
+	var item objectState
+	err := rows.Scan(&item.hash, &item.group, &item.resource, &item.namespace, &item.display, &item.present, &item.current, &item.historical, &item.revisions)
+	return item, true, err
+}
+
+func objectDelta(baseline, target objectState, change ChangeType) ObjectDelta {
+	identity := target
+	if change == ChangeDeleted && baseline.hash != "" {
+		identity = baseline
+	}
+	item := ObjectDelta{KeyHash: identity.hash, APIGroup: identity.group, Resource: identity.resource, Namespace: identity.namespace, DisplayName: identity.display, ChangeType: change, CurrentBytesDelta: target.current - baseline.current, HistoricalBytesDelta: target.historical - baseline.historical, RevisionCountDelta: target.revisions - baseline.revisions}
+	item.TotalBytesDelta = item.CurrentBytesDelta + item.HistoricalBytesDelta
+	return item
 }
 
 func comparePhysical(ctx context.Context, baselineDB, targetDB *sql.DB, result *Summary) error {
