@@ -283,10 +283,22 @@ func (s *server) handleAuditTimeline(writer http.ResponseWriter, request *http.R
 	if result.Items == nil {
 		result.Items = []auditanalysis.Event{}
 	}
+	normalizeAuditAggregates(&result)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"summary": result.Summary, "items": result.Items, "total": result.Total,
+		"byUsername": result.ByUsername, "byUserAgent": result.ByUserAgent,
+		"bySourceNetwork": result.BySourceNetwork, "byVerb": result.ByVerb,
+		"byResource": result.ByResource, "byNamespace": result.ByNamespace,
 		"page": page, "pageSize": pageSize,
 	})
+}
+
+func normalizeAuditAggregates(result *storage.AuditTimelineResult) {
+	for _, items := range []*[]auditanalysis.AggregateCount{&result.ByUsername, &result.ByUserAgent, &result.BySourceNetwork, &result.ByVerb, &result.ByResource, &result.ByNamespace} {
+		if *items == nil {
+			*items = []auditanalysis.AggregateCount{}
+		}
+	}
 }
 
 func parseAuditQuery(request *http.Request) (storage.AuditQuery, int, int, error) {

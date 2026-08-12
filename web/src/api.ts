@@ -38,6 +38,8 @@ export interface AuditEvent {
 export interface AuditTimeline {
   summary: { totalLines: number; validEvents: number; writeEvents: number; unknownLines: number; parseErrors: number; deduplicatedEvents: number; firstObservedAt?: string; lastObservedAt?: string };
   items: AuditEvent[]; total: number; page: number; pageSize: number;
+  byUsername: EvidenceCount[]; byUserAgent: EvidenceCount[]; bySourceNetwork: EvidenceCount[];
+  byVerb: EvidenceCount[]; byResource: EvidenceCount[]; byNamespace: EvidenceCount[];
 }
 
 export type AuditMatchLevel = 'high' | 'medium' | 'low' | 'unverified';

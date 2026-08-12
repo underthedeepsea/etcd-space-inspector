@@ -27,20 +27,20 @@ type AuditQuery struct {
 
 // AuditTimelineResult combines the scan summary with one filtered page.
 type AuditTimelineResult struct {
-	Summary auditanalysis.Summary `json:"summary"`
-	Items   []auditanalysis.Event `json:"items"`
-	Total   int                   `json:"total"`
-}
-
-// AuditEvidenceResult adds whole-window write aggregates to a page.
-type AuditEvidenceResult struct {
-	AuditTimelineResult
+	Summary         auditanalysis.Summary          `json:"summary"`
+	Items           []auditanalysis.Event          `json:"items"`
+	Total           int                            `json:"total"`
 	ByUsername      []auditanalysis.AggregateCount `json:"byUsername"`
 	ByUserAgent     []auditanalysis.AggregateCount `json:"byUserAgent"`
 	BySourceNetwork []auditanalysis.AggregateCount `json:"bySourceNetwork"`
 	ByVerb          []auditanalysis.AggregateCount `json:"byVerb"`
 	ByResource      []auditanalysis.AggregateCount `json:"byResource"`
 	ByNamespace     []auditanalysis.AggregateCount `json:"byNamespace"`
+}
+
+// AuditEvidenceResult adds whole-window write aggregates to a page.
+type AuditEvidenceResult struct {
+	AuditTimelineResult
 }
 
 // AuditRepository stores normalized events for one task-local database.
@@ -197,7 +197,11 @@ func (r *AuditRepository) Timeline(ctx context.Context, query AuditQuery) (Audit
 	if err != nil {
 		return AuditTimelineResult{}, err
 	}
-	return AuditTimelineResult{Summary: summary, Items: items, Total: total}, nil
+	result := AuditTimelineResult{Summary: summary, Items: items, Total: total}
+	if err := r.populateAggregates(ctx, where, args, &result); err != nil {
+		return AuditTimelineResult{}, err
+	}
+	return result, nil
 }
 
 func (r *AuditRepository) Evidence(ctx context.Context, query AuditQuery) (AuditEvidenceResult, error) {
@@ -226,16 +230,24 @@ func (r *AuditRepository) Evidence(ctx context.Context, query AuditQuery) (Audit
 		return AuditEvidenceResult{}, err
 	}
 	result := AuditEvidenceResult{AuditTimelineResult: AuditTimelineResult{Summary: summary, Items: items, Total: total}}
+	if err := r.populateAggregates(ctx, where, args, &result.AuditTimelineResult); err != nil {
+		return AuditEvidenceResult{}, err
+	}
+	return result, nil
+}
+
+func (r *AuditRepository) populateAggregates(ctx context.Context, where []string, args []any, result *AuditTimelineResult) error {
+	var err error
 	for _, aggregate := range []struct {
 		column string
 		target *[]auditanalysis.AggregateCount
 	}{{"username", &result.ByUsername}, {"user_agent", &result.ByUserAgent}, {"source_network", &result.BySourceNetwork}, {"verb", &result.ByVerb}, {"api_group || '/' || resource", &result.ByResource}, {"namespace", &result.ByNamespace}} {
 		*aggregate.target, err = r.auditCounts(ctx, where, args, aggregate.column)
 		if err != nil {
-			return AuditEvidenceResult{}, err
+			return err
 		}
 	}
-	return result, nil
+	return nil
 }
 
 func scanAuditRows(rows *sql.Rows) ([]auditanalysis.Event, error) {

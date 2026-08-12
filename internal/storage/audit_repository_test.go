@@ -127,6 +127,13 @@ func TestAuditRepositoryTimelineAppliesEveryFilterAndStableAggregateOrder(t *tes
 			t.Fatalf("query=%+v result=%+v", query, got)
 		}
 	}
+	timeline, err := repo.Timeline(context.Background(), AuditQuery{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline.Items) != 1 || len(timeline.ByUsername) != 2 || timeline.ByUsername[0].Name != "alice" || timeline.ByUsername[1].Name != "bob" {
+		t.Fatalf("timeline aggregates must cover the whole filtered range: %+v", timeline)
+	}
 	evidence, err := repo.Evidence(context.Background(), AuditQuery{Limit: 10})
 	if err != nil {
 		t.Fatal(err)

@@ -16,12 +16,12 @@ import (
 // Dropping a filter, computing the wrong offset, or serializing nil slices
 // would break the stable browser contract for Audit investigation.
 func TestAuditTimelineRouteParsesFiltersAndSerializesResult(t *testing.T) {
-	audits := &fakeAudits{result: storage.AuditTimelineResult{Summary: auditanalysis.Summary{TotalLines: 4, ValidEvents: 3}, Items: []auditanalysis.Event{{EventID: 7, Username: "alice"}}, Total: 1}}
+	audits := &fakeAudits{result: storage.AuditTimelineResult{Summary: auditanalysis.Summary{TotalLines: 4, ValidEvents: 3}, Items: []auditanalysis.Event{{EventID: 7, Username: "alice"}}, Total: 1, ByUsername: []auditanalysis.AggregateCount{{Name: "alice", Count: 1}}}}
 	h := New(Dependencies{Audits: audits})
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/t1/audit-timeline?from=2026-08-12T10:00:00Z&to=2026-08-12T11:00:00Z&verb=patch&username=alice&userAgent=controller%2Fv1&sourceNetwork=10.2.3.0%2F24&apiGroup=apps&resource=deployments&namespace=prod&objectKeyHash=abc123&page=2&pageSize=20", nil)
 	recorder := httptest.NewRecorder()
 	h.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"items":[`) || !strings.Contains(recorder.Body.String(), `"page":2`) {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"items":[`) || !strings.Contains(recorder.Body.String(), `"byUsername":[{"name":"alice","count":1}]`) || !strings.Contains(recorder.Body.String(), `"page":2`) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	q := audits.query
@@ -31,7 +31,7 @@ func TestAuditTimelineRouteParsesFiltersAndSerializesResult(t *testing.T) {
 
 	empty := httptest.NewRecorder()
 	New(Dependencies{Audits: &fakeAudits{}}).ServeHTTP(empty, httptest.NewRequest(http.MethodGet, "/api/v1/tasks/t1/audit-timeline", nil))
-	if !strings.Contains(empty.Body.String(), `"items":[]`) {
+	if !strings.Contains(empty.Body.String(), `"items":[]`) || !strings.Contains(empty.Body.String(), `"byUsername":[]`) || !strings.Contains(empty.Body.String(), `"byNamespace":[]`) {
 		t.Fatalf("empty body=%s", empty.Body.String())
 	}
 }
