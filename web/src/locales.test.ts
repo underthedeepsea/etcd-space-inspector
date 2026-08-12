@@ -98,3 +98,28 @@ for (const key of ['evidence.matchedEvents', 'evidence.windowSeconds'] as const)
     assert.ok(copy.help.length > 0);
   }
 }
+
+const auditKeys: TextKey[] = [
+  'form.audit', 'form.auditHint', 'type.audit', 'audit.title', 'audit.inputSummary',
+  'audit.validEvents', 'audit.writeEvents', 'audit.deduplicatedEvents', 'audit.username',
+  'audit.userAgent', 'audit.sourceNetwork', 'audit.verb', 'audit.resource', 'audit.namespace',
+  'audit.object', 'audit.responseCode', 'audit.payloadCaveat', 'audit.safetyBoundary',
+  'audit.empty', 'audit.loadFailed', 'audit.previous', 'audit.next',
+  'auditEvidence.title', 'auditEvidence.selectAudit', 'auditEvidence.noAudits',
+  'auditEvidence.noWindow', 'auditEvidence.sourceUnverified', 'auditEvidence.causality',
+  'auditEvidence.matchLevel', 'auditEvidence.high', 'auditEvidence.medium',
+  'auditEvidence.low', 'auditEvidence.unverified', 'auditEvidence.exactObjects',
+  'auditEvidence.writes', 'auditEvidence.candidates', 'auditEvidence.objectsUnavailable',
+  'auditEvidence.loadFailed', 'comparison.objectGrowth',
+];
+for (const key of auditKeys) {
+  for (const locale of ['zh', 'en'] as const) assert.ok(text(locale, key).length > 0);
+}
+
+for (const key of ['audit.totalLines', 'audit.validEvents', 'audit.writeEvents', 'audit.unknownLines', 'audit.parseErrors', 'audit.candidates', 'audit.exactMatches', 'audit.payloadBytes'] as const) {
+  for (const locale of ['zh', 'en'] as const) {
+    const copy = metric(locale, key);
+    assert.ok(copy.label.length > 0);
+    assert.ok(copy.help.length > 0);
+  }
+}

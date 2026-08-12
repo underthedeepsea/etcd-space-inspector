@@ -22,8 +22,36 @@ export interface Task {
 export interface CreateTask {
   name: string;
   inputPath: string;
-  inputType: 'snapshot' | 'raw-db' | 'log';
+  inputType: 'snapshot' | 'raw-db' | 'log' | 'audit';
   etcdVersion: string;
+}
+
+export interface AuditEvent {
+  eventId: number; lineNumber: number; auditIdHash: string; observedAt?: string;
+  stage: string; stageRank: number; verb: string; username: string; usernameHash: string;
+  userAgent: string; userAgentHash: string; sourceNetwork: string; sourceIpHash: string;
+  apiGroup: string; resource: string; subresource: string; namespace: string;
+  objectName: string; displayName: string; objectKeyHash: string; responseCode: number;
+  requestObjectBytes: number; responseObjectBytes: number; parseStatus: string;
+}
+
+export interface AuditTimeline {
+  summary: { totalLines: number; validEvents: number; writeEvents: number; unknownLines: number; parseErrors: number; deduplicatedEvents: number; firstObservedAt?: string; lastObservedAt?: string };
+  items: AuditEvent[]; total: number; page: number; pageSize: number;
+}
+
+export type AuditMatchLevel = 'high' | 'medium' | 'low' | 'unverified';
+export interface AuditCandidate {
+  username: string; usernameHash: string; userAgent: string; userAgentHash: string;
+  sourceNetwork: string; sourceIpHash: string; highestMatchLevel: AuditMatchLevel;
+  exactObjectMatches: number; resourceMatches: number; namespaceMatches: number; writes: number;
+  requestObjectBytes: number; responseObjectBytes: number;
+}
+export interface AuditEvidence {
+  diffId: string; auditTaskId: string; auditTaskName: string; auditTaskSha256: string;
+  from: string; to: string; windowSeconds: number; coverage: EvidenceCoverage;
+  sourceCompatibility: 'unverified'; objectsAvailable: boolean; candidates: AuditCandidate[];
+  items: AuditEvent[]; total: number; page: number; pageSize: number;
 }
 
 export interface LogEvent {
@@ -407,6 +435,13 @@ export interface DiffNamespace {
   totalBytesDelta: number;
 }
 
+export interface DiffObject {
+  keyHash: string; apiGroup: string; resource: string; namespace: string; displayName: string;
+  changeType: 'added' | 'deleted' | 'modified'; currentBytesDelta: number;
+  historicalBytesDelta: number; revisionCountDelta: number; totalBytesDelta: number;
+}
+export interface DiffObjectResult { items: DiffObject[]; total: number; objectsAvailable: boolean; page: number; pageSize: number }
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -460,6 +495,13 @@ export function getTimeline(id: string, query: {
   }
   const suffix = params.toString() ? `?${params.toString()}` : '';
   return request(`/api/v1/tasks/${encodeURIComponent(id)}/timeline${suffix}`);
+}
+
+export function getAuditTimeline(id: string, query: { from?: string; to?: string; verb?: string; username?: string; resource?: string; namespace?: string; page?: number; pageSize?: number } = {}): Promise<AuditTimeline> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value));
+  const suffix = params.toString() ? `?${params}` : '';
+  return request(`/api/v1/tasks/${encodeURIComponent(id)}/audit-timeline${suffix}`);
 }
 
 export function listPages(id: string, page: number, pageType: string): Promise<PageResult> {
@@ -549,6 +591,15 @@ export function getComparison(id: string): Promise<Comparison> {
 export function getDiffLogEvidence(diffId: string, logTaskId: string, page: number): Promise<DiffLogEvidence> {
   const query = new URLSearchParams({ logTaskId, page: String(page), pageSize: '50' });
   return request(`/api/v1/diffs/${encodeURIComponent(diffId)}/log-evidence?${query}`);
+}
+
+export function getDiffAuditEvidence(diffId: string, auditTaskId: string, page: number): Promise<AuditEvidence> {
+  const query = new URLSearchParams({ auditTaskId, page: String(page), pageSize: '50' });
+  return request(`/api/v1/diffs/${encodeURIComponent(diffId)}/audit-evidence?${query}`);
+}
+
+export function listDiffObjects(id: string): Promise<DiffObjectResult> {
+  return request(`/api/v1/diffs/${encodeURIComponent(id)}/objects?sort=total_bytes&order=desc&pageSize=20`);
 }
 
 export function cancelComparison(id: string): Promise<void> {
