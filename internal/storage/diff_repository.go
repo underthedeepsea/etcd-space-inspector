@@ -66,7 +66,7 @@ func (r *DiffRepository) ResetResults(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("begin diff reset: %w", err)
 	}
-	for _, table := range []string{"diff_summary", "diff_keys", "diff_prefixes", "diff_resources", "diff_namespaces"} {
+	for _, table := range []string{"diff_summary", "diff_keys", "diff_prefixes", "diff_resources", "diff_namespaces", "diff_objects"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("reset %s: %w", table, err)
@@ -74,6 +74,37 @@ func (r *DiffRepository) ResetResults(ctx context.Context) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit diff reset: %w", err)
+	}
+	return nil
+}
+
+// StoreObjects appends one bounded Kubernetes object delta batch.
+func (r *DiffRepository) StoreObjects(ctx context.Context, items []domain.ObjectDelta) error {
+	if len(items) == 0 {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin diff object batch: %w", err)
+	}
+	statement, err := tx.PrepareContext(ctx, `INSERT INTO diff_objects (
+key_hash,api_group,resource,namespace,display_name,change_type,current_bytes_delta,
+historical_bytes_delta,revision_count_delta,total_bytes_delta) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("prepare diff object batch: %w", err)
+	}
+	defer statement.Close()
+	for _, item := range items {
+		if _, err := statement.ExecContext(ctx, item.KeyHash, item.APIGroup, item.Resource,
+			item.Namespace, item.DisplayName, item.ChangeType, item.CurrentBytesDelta,
+			item.HistoricalBytesDelta, item.RevisionCountDelta, item.TotalBytesDelta); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("insert diff object batch: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit diff object batch: %w", err)
 	}
 	return nil
 }
@@ -92,6 +123,25 @@ type DiffKeyQuery struct {
 type DiffKeyResult struct {
 	Items []domain.KeyDelta `json:"items"`
 	Total int64             `json:"total"`
+}
+
+// DiffObjectQuery controls indexed Kubernetes object filtering and pagination.
+type DiffObjectQuery struct {
+	ChangeType domain.ChangeType
+	APIGroup   string
+	Resource   string
+	Namespace  string
+	Sort       string
+	Desc       bool
+	Limit      int
+	Offset     int
+}
+
+// DiffObjectResult is one page of aligned Kubernetes object deltas.
+type DiffObjectResult struct {
+	Items            []domain.ObjectDelta `json:"items"`
+	Total            int64                `json:"total"`
+	ObjectsAvailable bool                 `json:"objectsAvailable"`
 }
 
 // DiffDeltaQuery controls aggregate direction and bounds.
@@ -334,6 +384,69 @@ FROM diff_keys WHERE `+clause+" ORDER BY "+column+" "+direction+", key_hash ASC 
 		return DiffKeyResult{}, fmt.Errorf("iterate diff keys: %w", err)
 	}
 	return result, nil
+}
+
+// Objects returns a filtered, allow-listed page of Kubernetes object deltas.
+func (r *DiffRepository) Objects(ctx context.Context, query DiffObjectQuery) (DiffObjectResult, error) {
+	sorts := map[string]string{"object": "display_name", "total_bytes": "total_bytes_delta", "current_bytes": "current_bytes_delta", "historical_bytes": "historical_bytes_delta", "revision_count": "revision_count_delta"}
+	column, ok := sorts[query.Sort]
+	if !ok {
+		return DiffObjectResult{}, fmt.Errorf("invalid diff object sort")
+	}
+	if query.Limit < 1 || query.Limit > 500 {
+		query.Limit = 100
+	}
+	if query.Offset < 0 {
+		query.Offset = 0
+	}
+	where := []string{"1 = 1"}
+	args := []any{}
+	if query.ChangeType != "" {
+		if query.ChangeType != domain.ChangeAdded && query.ChangeType != domain.ChangeDeleted && query.ChangeType != domain.ChangeModified {
+			return DiffObjectResult{}, fmt.Errorf("invalid diff change type")
+		}
+		where = append(where, "change_type = ?")
+		args = append(args, query.ChangeType)
+	}
+	for _, filter := range []struct{ column, value string }{{"api_group", query.APIGroup}, {"resource", query.Resource}, {"namespace", query.Namespace}} {
+		if filter.value != "" {
+			where = append(where, filter.column+" = ?")
+			args = append(args, filter.value)
+		}
+	}
+	clause := strings.Join(where, " AND ")
+	result := DiffObjectResult{Items: []domain.ObjectDelta{}, ObjectsAvailable: true}
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM diff_objects WHERE "+clause, args...).Scan(&result.Total); err != nil {
+		if missingDiffObjects(err) {
+			result.ObjectsAvailable = false
+			return result, nil
+		}
+		return DiffObjectResult{}, fmt.Errorf("count diff objects: %w", err)
+	}
+	direction := "ASC"
+	if query.Desc {
+		direction = "DESC"
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT key_hash,api_group,resource,namespace,display_name,change_type,current_bytes_delta,historical_bytes_delta,revision_count_delta,total_bytes_delta FROM diff_objects WHERE `+clause+` ORDER BY `+column+` `+direction+`, key_hash ASC LIMIT ? OFFSET ?`, append(args, query.Limit, query.Offset)...)
+	if err != nil {
+		return DiffObjectResult{}, fmt.Errorf("select diff objects: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item domain.ObjectDelta
+		if err := rows.Scan(&item.KeyHash, &item.APIGroup, &item.Resource, &item.Namespace, &item.DisplayName, &item.ChangeType, &item.CurrentBytesDelta, &item.HistoricalBytesDelta, &item.RevisionCountDelta, &item.TotalBytesDelta); err != nil {
+			return DiffObjectResult{}, fmt.Errorf("scan diff object: %w", err)
+		}
+		result.Items = append(result.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return DiffObjectResult{}, fmt.Errorf("iterate diff objects: %w", err)
+	}
+	return result, nil
+}
+
+func missingDiffObjects(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "no such table: diff_objects")
 }
 
 // ReplacePrefixes atomically replaces Prefix deltas.

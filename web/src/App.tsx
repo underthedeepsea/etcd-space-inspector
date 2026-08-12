@@ -1,5 +1,8 @@
 import { createContext, FormEvent, useCallback, useContext, useEffect, useState } from 'react';
 import {
+  AuditEvidence,
+  AuditEvent,
+  AuditTimeline,
   BucketStat,
   cancelComparison,
   Comparison,
@@ -9,12 +12,15 @@ import {
   deleteTask,
   deleteComparison,
   DiffKeyResult,
+  DiffObjectResult,
   DiffLogEvidence,
   DiffNamespace,
   DiffPrefix,
   DiffResource,
   DiffSummary,
   getComparison,
+  getAuditTimeline,
+  getDiffAuditEvidence,
   getDiffOverview,
   getDiffLogEvidence,
   getTimeline,
@@ -30,6 +36,7 @@ import {
   listBuckets,
   listComparisons,
   listDiffKeys,
+  listDiffObjects,
   listDiffNamespaces,
   listDiffPrefixes,
   listDiffResources,
@@ -113,7 +120,7 @@ function statusLabel(status: string, t: Translate): string {
 }
 
 function inputTypeLabel(inputType: string, t: Translate): string {
-  const keys: Record<string, TextKey> = { snapshot: 'type.snapshot', 'raw-db': 'type.raw-db', log: 'type.log' };
+  const keys: Record<string, TextKey> = { snapshot: 'type.snapshot', 'raw-db': 'type.raw-db', log: 'type.log', audit: 'type.audit' };
   return t(keys[inputType] ?? 'value.unavailable');
 }
 
@@ -186,7 +193,7 @@ export default function App() {
       await createTask({
         name: String(form.get('name') ?? ''),
         inputPath: String(form.get('inputPath') ?? ''),
-        inputType: String(form.get('inputType') ?? 'snapshot') as 'snapshot' | 'raw-db' | 'log',
+        inputType: String(form.get('inputType') ?? 'snapshot') as 'snapshot' | 'raw-db' | 'log' | 'audit',
         etcdVersion: String(form.get('etcdVersion') ?? ''),
       });
       event.currentTarget.reset();
@@ -262,7 +269,7 @@ export default function App() {
         <form onSubmit={submit} className="task-form">
           <label>{t('form.name')}<input name="name" required /></label>
           <label>{t('form.inputPath')}<input name="inputPath" required placeholder={'C:\\data\\snapshot.db or /data/snapshot.db'} /></label>
-          <label>{t('form.inputType')}<select name="inputType"><option value="snapshot">{t('form.snapshot')}</option><option value="raw-db">{t('form.rawDb')}</option><option value="log">{t('form.log')}</option></select><small>{t('form.logHint')}</small></label>
+          <label>{t('form.inputType')}<select name="inputType"><option value="snapshot">{t('form.snapshot')}</option><option value="raw-db">{t('form.rawDb')}</option><option value="log">{t('form.log')}</option><option value="audit">{t('form.audit')}</option></select><small>{t('form.logHint')} · {t('form.auditHint')}</small></label>
           <label>{t('form.versionOverride')}<input name="etcdVersion" placeholder="3.4.13" /></label>
           <button type="submit" disabled={busy}>{t('form.createTask')}</button>
         </form>
@@ -284,8 +291,8 @@ export default function App() {
                   <td>{formatDate(task.createdAt, locale)}</td>
                   <td className="actions">
                     {task.status === 'completed' && <button onClick={() => setSelectedTask(task)}>{t('tasks.inspect')}</button>}
-                    {task.status === 'completed' && task.inputType !== 'log' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? configureComparison(task) : setBaselineTask(task.taskId)}>{baselineTask ? t('tasks.compare') : t('tasks.setBaseline')}</button>}
-                    {task.status === 'completed' && task.inputType !== 'log' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>{t('tasks.baseline')}</button>}
+                    {task.status === 'completed' && task.inputType !== 'log' && task.inputType !== 'audit' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? configureComparison(task) : setBaselineTask(task.taskId)}>{baselineTask ? t('tasks.compare') : t('tasks.setBaseline')}</button>}
+                    {task.status === 'completed' && task.inputType !== 'log' && task.inputType !== 'audit' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>{t('tasks.baseline')}</button>}
                     {task.status === 'pending' && <button disabled={busy} onClick={() => void action(() => startTask(task.taskId), t('tasks.started'))}>{t('tasks.start')}</button>}
                     {task.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelTask(task.taskId), t('tasks.cancelled'))}>{t('tasks.cancel')}</button>}
                     {task.status !== 'running' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteTask(task.taskId), t('tasks.deleted'))}>{t('tasks.delete')}</button>}
@@ -316,6 +323,7 @@ export default function App() {
       </section>
       {selectedTask && (selectedTask.inputType === 'log'
         ? <LogTimelineAnalysis task={selectedTask} onClose={() => setSelectedTask(null)} />
+        : selectedTask.inputType === 'audit' ? <AuditTimelineAnalysis task={selectedTask} onClose={() => setSelectedTask(null)} />
         : <PhysicalAnalysis taskId={selectedTask.taskId} onClose={() => setSelectedTask(null)} />)}
       {selectedDiff && <DiffAnalysis diffId={selectedDiff} tasks={tasks} onClose={() => setSelectedDiff(null)} />}
     </main>
@@ -333,6 +341,7 @@ function DiffAnalysis({ diffId, tasks, onClose }: { diffId: string; tasks: Task[
   const [prefixes, setPrefixes] = useState<DiffPrefix[]>([]);
   const [resources, setResources] = useState<DiffResource[]>([]);
   const [namespaces, setNamespaces] = useState<DiffNamespace[]>([]);
+  const [objects, setObjects] = useState<DiffObjectResult | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -344,13 +353,14 @@ function DiffAnalysis({ diffId, tasks, onClose }: { diffId: string; tasks: Task[
         if (!active) return;
         setComparison(nextComparison);
         if (nextComparison.status === 'completed') {
-		  const [nextSummary, nextGrowth, nextShrink, nextChurn, nextPrefixes, nextResources, nextNamespaces] = await Promise.all([
+		  const [nextSummary, nextGrowth, nextShrink, nextChurn, nextPrefixes, nextResources, nextNamespaces, nextObjects] = await Promise.all([
 			getDiffOverview(diffId), listDiffKeys(diffId, 'desc'), listDiffKeys(diffId, 'asc'), listDiffKeys(diffId, 'desc', 'revision_count'),
-            listDiffPrefixes(diffId), listDiffResources(diffId), listDiffNamespaces(diffId),
+            listDiffPrefixes(diffId), listDiffResources(diffId), listDiffNamespaces(diffId), listDiffObjects(diffId),
           ]);
           if (!active) return;
 		  setSummary(nextSummary); setGrowth(nextGrowth); setShrink(nextShrink); setChurn(nextChurn);
           setPrefixes(nextPrefixes); setResources(nextResources); setNamespaces(nextNamespaces); setError('');
+          setObjects(nextObjects);
         } else if (nextComparison.status === 'pending' || nextComparison.status === 'running') {
           timer = window.setTimeout(() => void load(), 1000);
         }
@@ -419,6 +429,8 @@ function DiffAnalysis({ diffId, tasks, onClose }: { diffId: string; tasks: Task[
           {namespaces.map((item) => <tr key={item.namespace || 'cluster-scoped'}><td>{item.namespace || t('value.clusterScoped')}</td><td>{formatSigned(item.currentObjectsDelta)}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td></tr>)}
         </tbody></table></div></div>
       </div>}
+      {summary.kubernetesAvailable && objects && <><h3>{t('comparison.objectGrowth')}</h3><div className="table-wrap"><table><thead><tr><th>{t('audit.object')}</th><th>{t('audit.resource')}</th><th>{t('audit.namespace')}</th><th>{t('comparison.current')}</th><th>{t('comparison.history')}</th><th>{t('comparison.revisionDelta')}</th></tr></thead><tbody>{objects.items.map((item) => <tr key={item.keyHash}><td>{item.displayName}</td><td>{item.apiGroup || t('value.core')}/{item.resource}</td><td>{item.namespace || t('value.clusterScoped')}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td><td>{formatSigned(item.revisionCountDelta)}</td></tr>)}</tbody></table></div></>}
+      <DiffAuditEvidencePanel comparison={comparison} tasks={tasks} />
       <DiffLogEvidencePanel comparison={comparison} tasks={tasks} />
     </>}
   </section>;
@@ -445,6 +457,47 @@ function EvidenceAggregateTable({ title, items }: { title: string; items: Eviden
     {items.map((item) => <tr key={item.name}><td><code>{item.name}</code></td><td>{item.count}</td></tr>)}
     {items.length === 0 && <tr><td colSpan={2} className="empty">—</td></tr>}
   </tbody></table></div></div>;
+}
+
+function auditMatchLabel(level: AuditEvidence['candidates'][number]['highestMatchLevel'], t: Translate): string {
+  return t(({ high: 'auditEvidence.high', medium: 'auditEvidence.medium', low: 'auditEvidence.low', unverified: 'auditEvidence.unverified' } as const)[level]);
+}
+
+function DiffAuditEvidencePanel({ comparison, tasks }: { comparison: Comparison | null; tasks: Task[] }) {
+  const { t } = useTranslation();
+  const completed = tasks.filter((task) => task.inputType === 'audit' && task.status === 'completed');
+  const [taskId, setTaskId] = useState(''); const [evidence, setEvidence] = useState<AuditEvidence | null>(null); const [error, setError] = useState('');
+  useEffect(() => {
+    if (!comparison?.baselineObservedAt || !comparison.targetObservedAt || !taskId) { setEvidence(null); return; }
+    let active = true; getDiffAuditEvidence(comparison.diffId, taskId, 1).then((value) => { if (active) { setEvidence(value); setError(''); } }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : t('auditEvidence.loadFailed')); });
+    return () => { active = false; };
+  }, [comparison, taskId, t]);
+  if (!comparison) return null;
+  const hasWindow = Boolean(comparison.baselineObservedAt && comparison.targetObservedAt);
+  return <section className="evidence-panel">
+    <h3>{t('auditEvidence.title')}</h3>
+    {!hasWindow && <p className="notice">{t('auditEvidence.noWindow')}</p>}
+    {hasWindow && <>
+      <label>{t('auditEvidence.selectAudit')}<select value={taskId} onChange={(event) => setTaskId(event.target.value)}>
+        <option value="">{completed.length ? t('auditEvidence.selectAudit') : t('auditEvidence.noAudits')}</option>
+        {completed.map((task) => <option key={task.taskId} value={task.taskId}>{task.name} · {task.sha256.slice(0, 12)}</option>)}
+      </select></label>
+      {error && <p role="alert">{error}</p>}
+      {evidence && <>
+        <p className="notice">{t('auditEvidence.sourceUnverified')} {t('auditEvidence.causality')}</p>
+        {!evidence.objectsAvailable && <p className="notice">{t('auditEvidence.objectsUnavailable')}</p>}
+        <div className="metrics">
+          <Metric metricKey="audit.candidates" value={String(evidence.candidates.length)} />
+          <Metric metricKey="audit.exactMatches" value={String(evidence.candidates.reduce((sum, item) => sum + item.exactObjectMatches, 0))} />
+          <Metric metricKey="audit.payloadBytes" value={formatBytes(evidence.candidates.reduce((sum, item) => sum + item.requestObjectBytes + item.responseObjectBytes, 0))} />
+        </div>
+        <h4>{t('auditEvidence.candidates')}</h4>
+        <div className="table-wrap"><table><thead><tr><th>{t('audit.username')}</th><th>{t('audit.userAgent')}</th><th>{t('audit.sourceNetwork')}</th><th>{t('auditEvidence.matchLevel')}</th><th>{t('auditEvidence.exactObjects')}</th><th>{t('auditEvidence.writes')}</th></tr></thead><tbody>
+          {evidence.candidates.map((item) => <tr key={`${item.usernameHash}:${item.userAgentHash}:${item.sourceIpHash}`}><td>{item.username}</td><td>{item.userAgent}</td><td>{item.sourceNetwork}</td><td><span className={`badge match-${item.highestMatchLevel}`}>{auditMatchLabel(item.highestMatchLevel, t)}</span></td><td>{item.exactObjectMatches}</td><td>{item.writes}</td></tr>)}
+        </tbody></table></div>
+      </>}
+    </>}
+  </section>;
 }
 
 function DiffLogEvidencePanel({ comparison, tasks }: { comparison: Comparison | null; tasks: Task[] }) {
@@ -535,6 +588,16 @@ function logTime(value: string | undefined, locale: Locale, t: Translate): strin
 
 function logValue(value: number | undefined): string {
   return value === undefined ? '—' : String(value);
+}
+
+type AuditFilters = { from: string; to: string; verb: string; username: string; resource: string; namespace: string };
+const initialAuditFilters: AuditFilters = { from: '', to: '', verb: '', username: '', resource: '', namespace: '' };
+
+function AuditTimelineAnalysis({ task, onClose }: { task: Task; onClose: () => void }) {
+  const { locale, t } = useTranslation(); const [timeline, setTimeline] = useState<AuditTimeline | null>(null); const [filters, setFilters] = useState(initialAuditFilters); const [page, setPage] = useState(1); const [error, setError] = useState('');
+  useEffect(() => { let active = true; getAuditTimeline(task.taskId, { ...filters, page, pageSize: 50 }).then((value) => { if (active) { setTimeline(value); setError(''); } }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : t('audit.loadFailed')); }); return () => { active = false; }; }, [task.taskId, filters, page, t]);
+  function update(name: keyof AuditFilters, value: string) { setFilters((current) => ({ ...current, [name]: value })); setPage(1); }
+  return <section className="panel analysis"><div className="section-title"><h2>{t('audit.title')}</h2><button onClick={onClose}>{t('actions.close')}</button></div><p><strong>{task.name}</strong> · {formatBytes(task.inputSize)} · <code>{task.sha256}</code></p>{error && <p role="alert">{error}</p>}{timeline && <><div className="metrics"><Metric metricKey="audit.totalLines" value={String(timeline.summary.totalLines)} /><Metric metricKey="audit.validEvents" value={String(timeline.summary.validEvents)} /><Metric metricKey="audit.writeEvents" value={String(timeline.summary.writeEvents)} /><Metric metricKey="audit.unknownLines" value={String(timeline.summary.unknownLines)} /><Metric metricKey="audit.parseErrors" value={String(timeline.summary.parseErrors)} /></div><p className="notice">{t('audit.safetyBoundary')} {t('audit.payloadCaveat')}</p><div className="filters"><label>{t('log.from')}<input type="datetime-local" onChange={(event) => update('from', event.target.value ? new Date(event.target.value).toISOString() : '')} /></label><label>{t('log.to')}<input type="datetime-local" onChange={(event) => update('to', event.target.value ? new Date(event.target.value).toISOString() : '')} /></label><label>{t('audit.verb')}<select value={filters.verb} onChange={(event) => update('verb', event.target.value)}><option value="">—</option>{['create','update','patch','delete','deletecollection'].map((verb) => <option key={verb}>{verb}</option>)}</select></label><label>{t('audit.username')}<input value={filters.username} onChange={(event) => update('username', event.target.value)} /></label><label>{t('audit.resource')}<input value={filters.resource} onChange={(event) => update('resource', event.target.value)} /></label><label>{t('audit.namespace')}<input value={filters.namespace} onChange={(event) => update('namespace', event.target.value)} /></label></div><h3>{t('audit.rankings')}</h3><div className="ranking-grid"><EvidenceAggregateTable title={t('audit.username')} items={timeline.byUsername} /><EvidenceAggregateTable title={t('audit.userAgent')} items={timeline.byUserAgent} /><EvidenceAggregateTable title={t('audit.sourceNetwork')} items={timeline.bySourceNetwork} /><EvidenceAggregateTable title={t('audit.verb')} items={timeline.byVerb} /><EvidenceAggregateTable title={t('audit.resource')} items={timeline.byResource} /><EvidenceAggregateTable title={t('audit.namespace')} items={timeline.byNamespace} /></div><div className="table-wrap"><table><thead><tr><th>{t('log.time')}</th><th>{t('audit.verb')}</th><th>{t('audit.username')}</th><th>{t('audit.userAgent')}</th><th>{t('audit.sourceNetwork')}</th><th>{t('audit.resource')}</th><th>{t('audit.namespace')}</th><th>{t('audit.object')}</th><th>{t('audit.responseCode')}</th></tr></thead><tbody>{timeline.items.map((event: AuditEvent) => <tr key={event.eventId}><td>{logTime(event.observedAt, locale, t)}</td><td>{event.verb}</td><td>{event.username}</td><td>{event.userAgent}</td><td>{event.sourceNetwork}</td><td>{event.apiGroup || t('value.core')}/{event.resource}</td><td>{event.namespace || t('value.clusterScoped')}</td><td>{event.displayName || '—'}</td><td>{event.responseCode || '—'}</td></tr>)}{timeline.items.length === 0 && <tr><td colSpan={9} className="empty">{t('audit.empty')}</td></tr>}</tbody></table></div><div className="pager"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t('audit.previous')}</button><span>{t('pagination.records', { page, count: timeline.total })}</span><button disabled={page * timeline.pageSize >= timeline.total} onClick={() => setPage((value) => value + 1)}>{t('audit.next')}</button></div></>}</section>;
 }
 
 function LogTimelineAnalysis({ task, onClose }: { task: Task; onClose: () => void }) {

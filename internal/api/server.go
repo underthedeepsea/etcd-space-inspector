@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"etcd-analyzer/internal/apperr"
+	"etcd-analyzer/internal/auditanalysis"
 	backend "etcd-analyzer/internal/backend/bbolt"
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/loganalysis"
@@ -60,15 +61,22 @@ type DiffService interface {
 	DeleteDiff(string) error
 	DiffOverview(context.Context, string) (domain.Summary, error)
 	DiffKeys(context.Context, string, storage.DiffKeyQuery) (storage.DiffKeyResult, error)
+	DiffObjects(context.Context, string, storage.DiffObjectQuery) (storage.DiffObjectResult, error)
 	DiffPrefixes(context.Context, string, storage.DiffDeltaQuery) ([]domain.PrefixDelta, error)
 	DiffResources(context.Context, string, storage.DiffDeltaQuery) ([]domain.ResourceDelta, error)
 	DiffNamespaces(context.Context, string, storage.DiffDeltaQuery) ([]domain.NamespaceDelta, error)
 	DiffLogEvidence(context.Context, string, string, storage.LogQuery) (loganalysis.DiffEvidence, error)
+	DiffAuditEvidence(context.Context, string, string, storage.AuditQuery) (auditanalysis.Evidence, error)
 }
 
 // LogService is the structured log timeline query boundary.
 type LogService interface {
 	Timeline(context.Context, string, storage.LogQuery) (storage.TimelineResult, error)
+}
+
+// AuditService is the normalized Kubernetes Audit timeline query boundary.
+type AuditService interface {
+	AuditTimeline(context.Context, string, storage.AuditQuery) (storage.AuditTimelineResult, error)
 }
 
 // Dependencies configure the API handler.
@@ -80,6 +88,7 @@ type Dependencies struct {
 	Kubernetes    KubernetesService
 	Diffs         DiffService
 	Logs          LogService
+	Audits        AuditService
 	MaxInputBytes int64
 	UI            http.Handler
 }
@@ -195,6 +204,14 @@ func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, r
 		return
 	}
 	if len(parts) == 2 {
+		if parts[1] == "audit-timeline" {
+			if request.Method != http.MethodGet {
+				methodNotAllowed(writer)
+				return
+			}
+			s.handleAuditTimeline(writer, request, id)
+			return
+		}
 		if parts[1] == "timeline" {
 			if request.Method != http.MethodGet {
 				methodNotAllowed(writer)
@@ -246,6 +263,109 @@ func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, r
 	default:
 		methodNotAllowed(writer)
 	}
+}
+
+func (s *server) handleAuditTimeline(writer http.ResponseWriter, request *http.Request, taskID string) {
+	if s.dependencies.Audits == nil {
+		writeError(writer, http.StatusNotFound, "NOT_FOUND", "Audit timeline resource not found")
+		return
+	}
+	query, page, pageSize, err := parseAuditQuery(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid Audit timeline query")
+		return
+	}
+	result, err := s.dependencies.Audits.AuditTimeline(request.Context(), taskID, query)
+	if err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	if result.Items == nil {
+		result.Items = []auditanalysis.Event{}
+	}
+	normalizeAuditAggregates(&result)
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"summary": result.Summary, "items": result.Items, "total": result.Total,
+		"byUsername": result.ByUsername, "byUserAgent": result.ByUserAgent,
+		"bySourceNetwork": result.BySourceNetwork, "byVerb": result.ByVerb,
+		"byResource": result.ByResource, "byNamespace": result.ByNamespace,
+		"page": page, "pageSize": pageSize,
+	})
+}
+
+func normalizeAuditAggregates(result *storage.AuditTimelineResult) {
+	for _, items := range []*[]auditanalysis.AggregateCount{&result.ByUsername, &result.ByUserAgent, &result.BySourceNetwork, &result.ByVerb, &result.ByResource, &result.ByNamespace} {
+		if *items == nil {
+			*items = []auditanalysis.AggregateCount{}
+		}
+	}
+}
+
+func parseAuditQuery(request *http.Request) (storage.AuditQuery, int, int, error) {
+	values := request.URL.Query()
+	for _, name := range []string{"from", "to", "verb", "username", "userAgent", "sourceNetwork", "apiGroup", "resource", "namespace", "objectKeyHash", "page", "pageSize"} {
+		if len(values[name]) > 1 {
+			return storage.AuditQuery{}, 0, 0, fmt.Errorf("duplicate query parameter")
+		}
+	}
+	page, pageSize, err := pagination(request, 100)
+	if err != nil {
+		return storage.AuditQuery{}, 0, 0, err
+	}
+	from, err := parseLogTime(values.Get("from"))
+	if err != nil {
+		return storage.AuditQuery{}, 0, 0, err
+	}
+	to, err := parseLogTime(values.Get("to"))
+	if err != nil {
+		return storage.AuditQuery{}, 0, 0, err
+	}
+	if from != nil && to != nil && !from.Before(*to) {
+		return storage.AuditQuery{}, 0, 0, fmt.Errorf("from must be before to")
+	}
+	verb := values.Get("verb")
+	if verb != "" && !auditanalysis.IsVerb(verb) {
+		return storage.AuditQuery{}, 0, 0, fmt.Errorf("invalid verb")
+	}
+	for _, value := range []string{values.Get("username"), values.Get("userAgent"), values.Get("sourceNetwork"), values.Get("apiGroup"), values.Get("resource"), values.Get("namespace")} {
+		if !validAuditDisplayFilter(value) {
+			return storage.AuditQuery{}, 0, 0, fmt.Errorf("invalid Audit filter")
+		}
+	}
+	objectHash := values.Get("objectKeyHash")
+	if objectHash != "" && !validHexHash(objectHash) {
+		return storage.AuditQuery{}, 0, 0, fmt.Errorf("invalid object key hash")
+	}
+	return storage.AuditQuery{
+		From: from, To: to, Verb: verb, Username: values.Get("username"),
+		UserAgent: values.Get("userAgent"), SourceNetwork: values.Get("sourceNetwork"),
+		APIGroup: values.Get("apiGroup"), Resource: values.Get("resource"), Namespace: values.Get("namespace"),
+		ObjectKeyHash: objectHash, Limit: pageSize, Offset: (page - 1) * pageSize,
+	}, page, pageSize, nil
+}
+
+func validAuditDisplayFilter(value string) bool {
+	if len(value) > 256 {
+		return false
+	}
+	for _, char := range value {
+		if char < 0x20 || char == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func validHexHash(value string) bool {
+	if len(value) < 1 || len(value) > 64 {
+		return false
+	}
+	for _, char := range value {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *server) handleTimeline(writer http.ResponseWriter, request *http.Request, taskID string) {

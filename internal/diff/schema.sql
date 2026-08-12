@@ -77,8 +77,24 @@ CREATE TABLE IF NOT EXISTS diff_namespaces (
   total_bytes_delta INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS diff_objects (
+  key_hash TEXT PRIMARY KEY,
+  api_group TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  change_type TEXT NOT NULL CHECK (change_type IN ('added', 'deleted', 'modified')),
+  current_bytes_delta INTEGER NOT NULL,
+  historical_bytes_delta INTEGER NOT NULL,
+  revision_count_delta INTEGER NOT NULL,
+  total_bytes_delta INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_diff_keys_total ON diff_keys(total_bytes_delta DESC, key_hash);
 CREATE INDEX IF NOT EXISTS idx_diff_keys_change ON diff_keys(change_type, total_bytes_delta DESC, key_hash);
 CREATE INDEX IF NOT EXISTS idx_diff_prefixes_total ON diff_prefixes(total_bytes_delta DESC, prefix);
 CREATE INDEX IF NOT EXISTS idx_diff_resources_total ON diff_resources(total_bytes_delta DESC, api_group, resource);
 CREATE INDEX IF NOT EXISTS idx_diff_namespaces_total ON diff_namespaces(total_bytes_delta DESC, namespace);
+CREATE INDEX IF NOT EXISTS idx_diff_objects_total ON diff_objects(total_bytes_delta DESC, key_hash);
+CREATE INDEX IF NOT EXISTS idx_diff_objects_scope ON diff_objects(api_group, resource, namespace, total_bytes_delta DESC, key_hash);
+CREATE INDEX IF NOT EXISTS idx_diff_objects_change ON diff_objects(change_type, total_bytes_delta DESC, key_hash);

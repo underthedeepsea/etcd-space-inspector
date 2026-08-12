@@ -18,6 +18,7 @@ type recordingSink struct {
 	prefixes   []domain.PrefixDelta
 	resources  []domain.ResourceDelta
 	namespaces []domain.NamespaceDelta
+	objects    []domain.ObjectDelta
 }
 
 func (s *recordingSink) ResetResults(context.Context) error { return nil }
@@ -39,6 +40,10 @@ func (s *recordingSink) StoreResources(_ context.Context, items []domain.Resourc
 }
 func (s *recordingSink) StoreNamespaces(_ context.Context, items []domain.NamespaceDelta) error {
 	s.namespaces = append(s.namespaces, items...)
+	return nil
+}
+func (s *recordingSink) StoreObjects(_ context.Context, items []domain.ObjectDelta) error {
+	s.objects = append(s.objects, items...)
 	return nil
 }
 
@@ -147,6 +152,32 @@ func TestCalculatorKeepsComponentChangesWhenTotalIsUnchanged(t *testing.T) {
 	}
 }
 
+// Aligning objects by display name instead of key hash would merge unrelated
+// sensitive objects, while omitting signed components would hide churn.
+func TestCalculatorAlignsKubernetesObjectsByKeyHash(t *testing.T) {
+	baseline := comparisonTaskDB(t, taskFixture{physicalBytes: 1000, resourceBytes: 100, objects: []objectFixture{
+		{hash: "modified", group: "apps", resource: "deployments", namespace: "prod", name: "api", display: "api", present: true, current: 100, historical: 20, revisions: 2},
+		{hash: "deleted", resource: "secrets", namespace: "prod", name: "old-secret", display: "redacted:same", present: true, current: 40, historical: 10, revisions: 2},
+		{hash: "unchanged", resource: "configmaps", namespace: "prod", name: "same", display: "same", present: true, current: 10, historical: 2, revisions: 1},
+	}})
+	target := comparisonTaskDB(t, taskFixture{physicalBytes: 1100, resourceBytes: 180, objects: []objectFixture{
+		{hash: "modified", group: "apps", resource: "deployments", namespace: "prod", name: "api", display: "api", present: true, current: 130, historical: 50, revisions: 5},
+		{hash: "added", resource: "secrets", namespace: "prod", name: "new-secret", display: "redacted:same", present: true, current: 60, historical: 0, revisions: 1},
+		{hash: "unchanged", resource: "configmaps", namespace: "prod", name: "same", display: "same", present: true, current: 10, historical: 2, revisions: 1},
+	}})
+	sink := &recordingSink{}
+	baseTask, targetTask := completedTasks()
+	if err := domain.NewCalculator(2).Compare(context.Background(), baseline, target, baseTask, targetTask, 0, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.objects) != 3 {
+		t.Fatalf("objects=%+v", sink.objects)
+	}
+	assertObjectDelta(t, sink.objects, "modified", domain.ChangeModified, 30, 30, 3)
+	assertObjectDelta(t, sink.objects, "deleted", domain.ChangeDeleted, -40, -10, -2)
+	assertObjectDelta(t, sink.objects, "added", domain.ChangeAdded, 60, 0, 1)
+}
+
 type taskFixture struct {
 	physicalBytes     int64
 	freeBytes         int64
@@ -156,12 +187,19 @@ type taskFixture struct {
 	resourceBytes     int64
 	namespaceBytes    int64
 	semanticAvailable *bool
+	objects           []objectFixture
 }
 
 type keyFixture struct {
 	hash, text, prefix  string
 	current, historical int64
 	present             *bool
+}
+
+type objectFixture struct {
+	hash, group, resource, namespace, name, display string
+	present                                         bool
+	current, historical, revisions                  int64
 }
 
 func comparisonTaskDB(t *testing.T, fixture taskFixture) *sql.DB {
@@ -191,10 +229,26 @@ func comparisonTaskDB(t *testing.T, fixture taskFixture) *sql.DB {
           historical_bytes, tombstone_count, tombstone_bytes, revision_count, historical_amplification
 		) VALUES ('task', ?, ?, ?, ?, 1, 1, 1, 0, 0, ?, ?, 0, ?, 0, 0, 1, 0)`, item.hash, item.text, item.prefix, present, item.current, item.current, item.historical)
 	}
+	for _, item := range fixture.objects {
+		mustExec(t, db, `INSERT INTO kube_object_records (task_id,key_hash,storage_prefix,api_group,resource,namespace,object_name,display_name,crd,cluster_scoped,sensitive,decode_status,present,current_bytes,historical_bytes,revision_count,largest_field_path,largest_field_bytes) VALUES ('task',?,'',?,?,?,?,?,0,0,0,'decoded_json',?,?,?,?, '',0)`, item.hash, item.group, item.resource, item.namespace, item.name, item.display, item.present, item.current, item.historical, item.revisions)
+	}
 	mustExec(t, db, `INSERT INTO prefix_stats VALUES ('task', '/', 1, ?, ?, 0, 0, 0, 0, ?)`, len(fixture.keys), fixture.prefixBytes, fixture.prefixBytes)
 	mustExec(t, db, `INSERT INTO kube_resource_stats VALUES ('task', 'apps', 'deployments', 1, ?, 0)`, fixture.resourceBytes)
 	mustExec(t, db, `INSERT INTO kube_namespace_stats VALUES ('task', 'prod', 1, ?, 0)`, fixture.namespaceBytes)
 	return db
+}
+
+func assertObjectDelta(t *testing.T, items []domain.ObjectDelta, hash string, change domain.ChangeType, current, historical, revisions int64) {
+	t.Helper()
+	for _, item := range items {
+		if item.KeyHash == hash {
+			if item.ChangeType != change || item.CurrentBytesDelta != current || item.HistoricalBytesDelta != historical || item.RevisionCountDelta != revisions {
+				t.Fatalf("object %s=%+v", hash, item)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing object %s in %+v", hash, items)
 }
 
 func completedTasks() (task.Task, task.Task) {

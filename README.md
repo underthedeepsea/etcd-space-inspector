@@ -1,6 +1,6 @@
 # etcd Space Inspector
 
-etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。它支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析、Key 保留 revision 活跃度、两个已完成 Snapshot 任务之间的持久化空间差分，以及独立的 etcd 日志时间线分析。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
+etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。它支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析、Key 保留 revision 活跃度、两个已完成 Snapshot 任务之间的持久化空间差分、独立的 etcd 日志时间线，以及 Kubernetes Audit 写入来源证据匹配。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
 
 发布版本、对应标签和分支规则见 [RELEASE.md](RELEASE.md)。
 
@@ -71,6 +71,12 @@ bin/etcd-analyzer analyze \
 bin/etcd-analyzer analyze \
   --input ./etcd.log.gz \
   --type log \
+  --output ./analysis-data
+
+# 分析 Kubernetes Audit JSON 行或 gzip（按内容识别）
+bin/etcd-analyzer analyze \
+  --input ./kube-apiserver-audit.jsonl.gz \
+  --type audit \
   --output ./analysis-data
 
 # 比较两个已完成的分析任务
@@ -147,6 +153,20 @@ GET /api/v1/diffs/{diffId}/log-evidence?logTaskId=<id>&page=1&pageSize=100
 
 M9 始终提示日志来源与 Snapshot 的集群或 Member 一致性未经验证；时间重合只是证据，不是根因、Controller、客户端或用户归因。没有采集时间的差分需要重新创建后才能关联。接口和页面只返回标准化事件字段，不返回原始日志行、请求体、Token 或未筛选 JSON；M9 不包含 Audit、Prometheus、新 CLI 关联命令或独立 HTML 关联报告。
 
+## Kubernetes Audit 写入来源证据
+
+`audit` 任务支持 Kubernetes Audit v1/v1beta1 JSON Lines 和 gzip。解析器逐行读取，单行上限 8 MiB、解压后输入上限 100 GiB；同一 `auditID` 的多个 stage 在 SQLite 中优先保留 `ResponseComplete`。只把 create、update、patch、delete 和 deletecollection 作为写操作。
+
+标准化结果保留可读用户名或 ServiceAccount、User-Agent 首个 token、IPv4 `/24` 或 IPv6 `/64` 网段、Kubernetes Resource/Namespace 和脱敏对象标识。原始行、request/response 对象、request URI、Token、完整 User-Agent 和完整 IP 不进入 SQLite、Manifest、API 或页面。页面显示的 request/response 对象字节是 Audit JSON 载荷大小，不是 etcd 或数据库实际增长字节。
+
+带有两个实际采集时间的已完成 Snapshot 差分可查询：
+
+```text
+GET /api/v1/diffs/{diffId}/audit-evidence?auditTaskId=<id>&page=1&pageSize=100
+```
+
+窗口固定为 `(baselineObservedAt,targetObservedAt]`。high 表示 Audit 对象哈希精确命中正增长对象；medium 表示正增长 Resource 与 Namespace 同时命中；low 表示只命中 Resource 或 Namespace；unverified 事件只保留在时间线，不进入候选排行。候选按用户、客户端和来源网段的不可逆指纹聚合。由于 Snapshot 与 Audit 没有可信 Cluster ID，`sourceCompatibility` 始终为 `unverified`；匹配属于结构证据，不代表责任或因果已经证明。
+
 ## 数据目录
 
 ```text
@@ -155,7 +175,7 @@ analysis-data/
 │   └── <task-id>/
 │       ├── manifest.json
 │       ├── task.db
-│       ├── source/input.db（Snapshot/raw-db）或 source/input.log（日志）
+│       ├── source/input.db（Snapshot/raw-db）、source/input.log（日志）或 source/input.audit（Audit）
 │       ├── exports/report.html
 │       └── logs/
 └── diffs/
@@ -192,6 +212,7 @@ analysis-data/
 - `GET /api/v1/tasks/{id}/objects/{object-id}`
 - `GET /api/v1/tasks/{id}/objects/{object-id}/revisions`
 - `GET /api/v1/tasks/{id}/timeline`
+- `GET /api/v1/tasks/{id}/audit-timeline`
 - `POST /api/v1/diffs`
 - `GET /api/v1/diffs`
 - `GET /api/v1/diffs/{id}`
@@ -200,7 +221,9 @@ analysis-data/
 - `GET /api/v1/diffs/{id}/prefixes`
 - `GET /api/v1/diffs/{id}/resources`
 - `GET /api/v1/diffs/{id}/namespaces`
+- `GET /api/v1/diffs/{id}/objects`
 - `GET /api/v1/diffs/{id}/log-evidence`
+- `GET /api/v1/diffs/{id}/audit-evidence`
 - `POST /api/v1/diffs/{id}/cancel`
 - `DELETE /api/v1/diffs/{id}`
 
@@ -211,6 +234,8 @@ Key 列表支持 `prefix`、`minSize`、`minRevisions`、`tombstone`、`sort`、
 Kubernetes 对象列表支持 `group`、`resource`、`namespace`、`minSize`、`minRevisions`、`decodeStatus`、`field`、`sort`、`order`、`page` 和 `pageSize`。字段类别限于 managedFields、annotations、labels、spec、status、data 和 binaryData；对象详情只返回字段路径、大小、类型、哈希和相邻 revision 的变化分类。
 
 差分 Key 列表支持 `changeType`、`prefix`、`sort`、`order`、`page` 和 `pageSize`，其中 `changeType` 限于 `added`、`deleted` 和 `modified`。Prefix、Resource 和 Namespace 差分支持 `order` 与最大 500 条的 `limit`。
+
+差分对象列表支持 `changeType`、`apiGroup`、`resource`、`namespace`、`sort`、`order`、`page` 和 `pageSize`。Audit 时间线支持 `from`、`to`、`verb`、`username`、`userAgent`、`sourceNetwork`、`apiGroup`、`resource`、`namespace`、`objectKeyHash`、`page` 和 `pageSize`；单值参数重复、非法 verb、非递增时间窗或超过 500 的页大小会被拒绝。
 
 日志任务的时间线接口返回扫描摘要、标准化事件分页和总数。支持 `from`、`to`、`eventType`、`severity`、`source`、`page`、`pageSize` 查询参数；时间使用 RFC 3339，事件类型和严重度使用固定白名单，单页最多 500 条。事件只包含时间、类型、严重度、来源、经过范围校验的 duration/revision/DB size 和 SHA-256 指纹，不返回原始日志行。
 
@@ -233,11 +258,11 @@ CRD JSON 使用结构化字段分析。每个 registry revision 会记录 `decod
 
 原始 Value 只在有界内存流水线中参与解码、长度与 SHA-256 计算，不写入 SQLite、日志、API 或 HTML。字段分析只持久化路径、字节数、类型和 SHA-256；Secret、ServiceAccount 等敏感资源在 Kubernetes 视图中使用 `redacted:<key-hash>` 名称。
 
-本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，也不采集日志、审计或 Prometheus 数据。它可以比较两个已完成任务：物理结果在两侧都有 bbolt 分析数据时生成；MVCC 和 Kubernetes 差分只有在两侧语义结果可用且 etcd 主次版本兼容时生成，否则明确降级且不猜测。差分数据库只保存大小、计数、Key 标识和聚合增量，不保存原始 Value。
+本工具不会修改源数据库，不会自动 compact/defrag，不会连接生产 etcd，也不会主动采集日志、Audit 或 Prometheus 数据；日志和 Audit 只能由用户提供离线文件。它可以比较两个已完成任务：物理结果在两侧都有 bbolt 分析数据时生成；MVCC 和 Kubernetes 差分只有在两侧语义结果可用且 etcd 主次版本兼容时生成，否则明确降级且不猜测。差分数据库只保存大小、计数、Key 标识和聚合增量，不保存原始 Value。
 
 日志分析任务只读取导入的日志副本，流式解压 gzip 并按行识别 NOSPACE、quota exceeded、compaction、defrag、slow apply、backend/WAL fsync、leader change、request timeout、snapshot、lease、corruption、large request 等事件。未知行仅保留不可逆指纹；原始行、请求体、Token、完整 User-Agent 和未筛选字段不会写入任务数据库。日志时间线描述的是日志证据，不会在没有 Audit Log 或 Snapshot 关联证据时判断具体 Controller、客户端或用户。
 
-双 Snapshot 差分可以定位增长来自当前有效数据、历史 revision、tombstone、空闲页、Key、Prefix、Resource 或 Namespace，但单凭 Snapshot 仍不能确定具体 Controller、客户端或用户身份；这需要后续日志和 Audit Log 关联能力。
+双 Snapshot 差分可以定位增长来自当前有效数据、历史 revision、tombstone、空闲页、Key、Prefix、Resource、Namespace 或具体对象。结合用户提供的 Audit 文件后可列出结构匹配的候选 Controller、客户端或用户，但在没有可信 Cluster ID 和因果证据时不会描述为确定责任归因。
 
 ## 验证
 

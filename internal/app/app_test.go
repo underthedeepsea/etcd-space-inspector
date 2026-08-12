@@ -54,6 +54,47 @@ func TestApplicationCreatesRunsListsAndDeletesTask(t *testing.T) {
 	}
 }
 
+// Returning a terminal manifest before the background worker has closed its
+// database lets callers race cleanup, which is especially visible on Windows.
+func TestGetWaitsForTerminalTaskCleanup(t *testing.T) {
+	application := New(filepath.Join(t.TempDir(), "data"), nil)
+	item := createApplicationTask(t, application, "cleanup-task")
+	item.Status = task.StatusCompleted
+	if err := application.manifests.Save(item); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	application.running[item.ID] = runHandle{done: done}
+	returned := make(chan error, 1)
+	go func() {
+		_, err := application.Get(context.Background(), item.ID)
+		returned <- err
+	}()
+	select {
+	case err := <-returned:
+		t.Fatalf("Get returned before cleanup completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(done)
+	if err := <-returned; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createApplicationTask(t *testing.T, application *Application, name string) task.Task {
+	t.Helper()
+	root := t.TempDir()
+	source := filepath.Join(root, "input.db")
+	if err := os.WriteFile(source, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	item, err := application.Create(context.Background(), task.CreateRequest{Name: name, SourcePath: source, InputType: "snapshot", MaxInputBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return item
+}
+
 func TestRecoverMigratesCompletedM3Task(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "input.db")

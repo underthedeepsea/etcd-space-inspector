@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"etcd-analyzer/internal/auditanalysis"
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/loganalysis"
 	"etcd-analyzer/internal/storage"
@@ -142,13 +143,98 @@ func (s *server) handleDiff(writer http.ResponseWriter, request *http.Request, r
 		writeJSON(writer, http.StatusOK, item)
 	case "keys":
 		s.handleDiffKeys(writer, request, id)
+	case "objects":
+		s.handleDiffObjects(writer, request, id)
 	case "prefixes", "resources", "namespaces":
 		s.handleDiffAggregates(writer, request, id, resource)
 	case "log-evidence":
 		s.handleDiffLogEvidence(writer, request, id)
+	case "audit-evidence":
+		s.handleDiffAuditEvidence(writer, request, id)
 	default:
 		writeError(writer, http.StatusNotFound, "NOT_FOUND", "comparison resource not found")
 	}
+}
+
+func (s *server) handleDiffAuditEvidence(writer http.ResponseWriter, request *http.Request, diffID string) {
+	taskID, query, page, pageSize, err := parseDiffAuditEvidenceQuery(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid Audit evidence query")
+		return
+	}
+	result, err := s.dependencies.Diffs.DiffAuditEvidence(request.Context(), diffID, taskID, query)
+	if err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	if result.Candidates == nil {
+		result.Candidates = []auditanalysis.Candidate{}
+	}
+	if result.Items == nil {
+		result.Items = []auditanalysis.Event{}
+	}
+	result.Page, result.PageSize = page, pageSize
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func parseDiffAuditEvidenceQuery(request *http.Request) (string, storage.AuditQuery, int, int, error) {
+	values := request.URL.Query()
+	taskIDs := values["auditTaskId"]
+	if len(taskIDs) != 1 || !validEvidenceTaskID(taskIDs[0]) {
+		return "", storage.AuditQuery{}, 0, 0, fmt.Errorf("one safe auditTaskId is required")
+	}
+	page, pageSize, err := pagination(request, 100)
+	if err != nil {
+		return "", storage.AuditQuery{}, 0, 0, err
+	}
+	return taskIDs[0], storage.AuditQuery{Limit: pageSize, Offset: (page - 1) * pageSize}, page, pageSize, nil
+}
+
+func (s *server) handleDiffObjects(writer http.ResponseWriter, request *http.Request, id string) {
+	query, page, pageSize, err := parseDiffObjectQuery(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid comparison object query")
+		return
+	}
+	result, err := s.dependencies.Diffs.DiffObjects(request.Context(), id, query)
+	if err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	if result.Items == nil {
+		result.Items = []domain.ObjectDelta{}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"items": result.Items, "total": result.Total, "objectsAvailable": result.ObjectsAvailable, "page": page, "pageSize": pageSize})
+}
+
+func parseDiffObjectQuery(request *http.Request) (storage.DiffObjectQuery, int, int, error) {
+	values := request.URL.Query()
+	page, pageSize, err := pagination(request, 100)
+	if err != nil {
+		return storage.DiffObjectQuery{}, 0, 0, err
+	}
+	change := domain.ChangeType(values.Get("changeType"))
+	if change != "" && change != domain.ChangeAdded && change != domain.ChangeDeleted && change != domain.ChangeModified {
+		return storage.DiffObjectQuery{}, 0, 0, fmt.Errorf("invalid change type")
+	}
+	sortName := values.Get("sort")
+	if sortName == "" {
+		sortName = "total_bytes"
+	}
+	allowed := map[string]bool{"object": true, "total_bytes": true, "current_bytes": true, "historical_bytes": true, "revision_count": true}
+	if !allowed[sortName] {
+		return storage.DiffObjectQuery{}, 0, 0, fmt.Errorf("invalid sort")
+	}
+	order := values.Get("order")
+	if order != "" && order != "asc" && order != "desc" {
+		return storage.DiffObjectQuery{}, 0, 0, fmt.Errorf("invalid order")
+	}
+	for _, value := range []string{values.Get("apiGroup"), values.Get("resource"), values.Get("namespace")} {
+		if !validAuditDisplayFilter(value) {
+			return storage.DiffObjectQuery{}, 0, 0, fmt.Errorf("invalid filter")
+		}
+	}
+	return storage.DiffObjectQuery{ChangeType: change, APIGroup: values.Get("apiGroup"), Resource: values.Get("resource"), Namespace: values.Get("namespace"), Sort: sortName, Desc: order == "desc" || order == "" && sortName != "object", Limit: pageSize, Offset: (page - 1) * pageSize}, page, pageSize, nil
 }
 
 func (s *server) handleDiffKeys(writer http.ResponseWriter, request *http.Request, id string) {

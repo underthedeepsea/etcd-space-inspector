@@ -178,7 +178,7 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return 1
 	}
 	handler := api.New(api.Dependencies{
-		Version: version.Value, Tasks: application, Analysis: application, MVCC: application, Kubernetes: application, Diffs: application, Logs: application,
+		Version: version.Value, Tasks: application, Analysis: application, MVCC: application, Kubernetes: application, Diffs: application, Logs: application, Audits: application,
 		MaxInputBytes: settings.Security.MaxInputBytes, UI: web.Handler(),
 	})
 	listener, err := net.Listen("tcp", settings.Server.Listen)
@@ -232,8 +232,8 @@ func loopbackAddress(address string) bool {
 func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("analyze", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	input := flags.String("input", "", "snapshot, raw database, or log path")
-	inputType := flags.String("type", "snapshot", "snapshot, raw-db, or log")
+	input := flags.String("input", "", "snapshot, raw database, log, or Audit path")
+	inputType := flags.String("type", "snapshot", "snapshot, raw-db, log, or audit")
 	output := flags.String("output", "./analysis-data", "analysis data directory")
 	etcdVersion := flags.String("etcd-version", "", "source etcd version")
 	name := flags.String("name", "", "task name")
@@ -286,6 +286,8 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	var stages []task.Stage
 	if item.InputType == "log" {
 		stages = []task.Stage{app.LogStage(manifests, settings.Analysis.SQLiteBatchSize)}
+	} else if item.InputType == "audit" {
+		stages = []task.Stage{app.AuditStage(manifests, settings.Analysis.SQLiteBatchSize)}
 	} else {
 		stages = []task.Stage{
 			app.PhysicalStage(manifests, settings.Analysis.SQLiteBatchSize),

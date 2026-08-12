@@ -148,3 +148,17 @@ type NamespaceDelta struct {
 	HistoricalBytesDelta int64  `json:"historicalBytesDelta"`
 	TotalBytesDelta      int64  `json:"totalBytesDelta"`
 }
+
+// ObjectDelta is one aligned Kubernetes object result without raw values.
+type ObjectDelta struct {
+	KeyHash              string     `json:"keyHash"`
+	APIGroup             string     `json:"apiGroup"`
+	Resource             string     `json:"resource"`
+	Namespace            string     `json:"namespace"`
+	DisplayName          string     `json:"displayName"`
+	ChangeType           ChangeType `json:"changeType"`
+	CurrentBytesDelta    int64      `json:"currentBytesDelta"`
+	HistoricalBytesDelta int64      `json:"historicalBytesDelta"`
+	RevisionCountDelta   int64      `json:"revisionCountDelta"`
+	TotalBytesDelta      int64      `json:"totalBytesDelta"`
+}

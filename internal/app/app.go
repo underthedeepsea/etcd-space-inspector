@@ -194,7 +194,23 @@ func (a *Application) Get(ctx context.Context, id string) (task.Task, error) {
 	if err := ctx.Err(); err != nil {
 		return task.Task{}, err
 	}
-	return a.manifests.Get(id)
+	item, err := a.manifests.Get(id)
+	if err != nil {
+		return task.Task{}, err
+	}
+	if item.Status == task.StatusCompleted || item.Status == task.StatusFailed || item.Status == task.StatusCancelled {
+		a.mu.Lock()
+		handle, running := a.running[id]
+		a.mu.Unlock()
+		if running {
+			select {
+			case <-handle.done:
+			case <-ctx.Done():
+				return task.Task{}, ctx.Err()
+			}
+		}
+	}
+	return item, nil
 }
 
 // Start begins analysis in the background.
@@ -235,6 +251,9 @@ func (a *Application) Start(ctx context.Context, id string) error {
 func (a *Application) stagesFor(item task.Task) []task.Stage {
 	if item.InputType == "log" {
 		return []task.Stage{LogStage(a.manifests, a.diffBatchSize)}
+	}
+	if item.InputType == "audit" {
+		return []task.Stage{AuditStage(a.manifests, a.diffBatchSize)}
 	}
 	return a.stages
 }
@@ -280,7 +299,7 @@ func (a *Application) RecoverInterrupted(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if item.InputType != "log" {
+		if item.InputType != "log" && item.InputType != "audit" {
 			if err := storage.NewKubeRepository(db, item.ID).EnsureUnavailable(ctx); err != nil {
 				db.Close()
 				return err
