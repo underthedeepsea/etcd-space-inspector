@@ -74,6 +74,8 @@ import {
   text,
   TextKey,
 } from './locales';
+import { MetricsTimelineAnalysis } from './MetricsTimeline';
+import { DiffMetricsEvidencePanel } from './MetricsEvidence';
 
 type Translate = (key: TextKey, values?: Record<string, string | number>) => string;
 
@@ -120,7 +122,7 @@ function statusLabel(status: string, t: Translate): string {
 }
 
 function inputTypeLabel(inputType: string, t: Translate): string {
-  const keys: Record<string, TextKey> = { snapshot: 'type.snapshot', 'raw-db': 'type.raw-db', log: 'type.log', audit: 'type.audit' };
+  const keys: Record<string, TextKey> = { snapshot: 'type.snapshot', 'raw-db': 'type.raw-db', log: 'type.log', audit: 'type.audit', metrics: 'type.metrics' };
   return t(keys[inputType] ?? 'value.unavailable');
 }
 
@@ -193,7 +195,7 @@ export default function App() {
       await createTask({
         name: String(form.get('name') ?? ''),
         inputPath: String(form.get('inputPath') ?? ''),
-        inputType: String(form.get('inputType') ?? 'snapshot') as 'snapshot' | 'raw-db' | 'log' | 'audit',
+        inputType: String(form.get('inputType') ?? 'snapshot') as 'snapshot' | 'raw-db' | 'log' | 'audit' | 'metrics',
         etcdVersion: String(form.get('etcdVersion') ?? ''),
       });
       event.currentTarget.reset();
@@ -269,7 +271,7 @@ export default function App() {
         <form onSubmit={submit} className="task-form">
           <label>{t('form.name')}<input name="name" required /></label>
           <label>{t('form.inputPath')}<input name="inputPath" required placeholder={'C:\\data\\snapshot.db or /data/snapshot.db'} /></label>
-          <label>{t('form.inputType')}<select name="inputType"><option value="snapshot">{t('form.snapshot')}</option><option value="raw-db">{t('form.rawDb')}</option><option value="log">{t('form.log')}</option><option value="audit">{t('form.audit')}</option></select><small>{t('form.logHint')} · {t('form.auditHint')}</small></label>
+          <label>{t('form.inputType')}<select name="inputType"><option value="snapshot">{t('form.snapshot')}</option><option value="raw-db">{t('form.rawDb')}</option><option value="log">{t('form.log')}</option><option value="audit">{t('form.audit')}</option><option value="metrics">{t('form.metrics')}</option></select><small>{t('form.logHint')} · {t('form.auditHint')} · {t('form.metricsHint')}</small></label>
           <label>{t('form.versionOverride')}<input name="etcdVersion" placeholder="3.4.13" /></label>
           <button type="submit" disabled={busy}>{t('form.createTask')}</button>
         </form>
@@ -291,8 +293,8 @@ export default function App() {
                   <td>{formatDate(task.createdAt, locale)}</td>
                   <td className="actions">
                     {task.status === 'completed' && <button onClick={() => setSelectedTask(task)}>{t('tasks.inspect')}</button>}
-                    {task.status === 'completed' && task.inputType !== 'log' && task.inputType !== 'audit' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? configureComparison(task) : setBaselineTask(task.taskId)}>{baselineTask ? t('tasks.compare') : t('tasks.setBaseline')}</button>}
-                    {task.status === 'completed' && task.inputType !== 'log' && task.inputType !== 'audit' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>{t('tasks.baseline')}</button>}
+                    {task.status === 'completed' && task.inputType !== 'log' && task.inputType !== 'audit' && task.inputType !== 'metrics' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? configureComparison(task) : setBaselineTask(task.taskId)}>{baselineTask ? t('tasks.compare') : t('tasks.setBaseline')}</button>}
+                    {task.status === 'completed' && task.inputType !== 'log' && task.inputType !== 'audit' && task.inputType !== 'metrics' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>{t('tasks.baseline')}</button>}
                     {task.status === 'pending' && <button disabled={busy} onClick={() => void action(() => startTask(task.taskId), t('tasks.started'))}>{t('tasks.start')}</button>}
                     {task.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelTask(task.taskId), t('tasks.cancelled'))}>{t('tasks.cancel')}</button>}
                     {task.status !== 'running' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteTask(task.taskId), t('tasks.deleted'))}>{t('tasks.delete')}</button>}
@@ -324,6 +326,7 @@ export default function App() {
       {selectedTask && (selectedTask.inputType === 'log'
         ? <LogTimelineAnalysis task={selectedTask} onClose={() => setSelectedTask(null)} />
         : selectedTask.inputType === 'audit' ? <AuditTimelineAnalysis task={selectedTask} onClose={() => setSelectedTask(null)} />
+        : selectedTask.inputType === 'metrics' ? <MetricsTimelineAnalysis task={selectedTask} locale={locale} t={t} onClose={() => setSelectedTask(null)} />
         : <PhysicalAnalysis taskId={selectedTask.taskId} onClose={() => setSelectedTask(null)} />)}
       {selectedDiff && <DiffAnalysis diffId={selectedDiff} tasks={tasks} onClose={() => setSelectedDiff(null)} />}
     </main>
@@ -332,7 +335,7 @@ export default function App() {
 }
 
 function DiffAnalysis({ diffId, tasks, onClose }: { diffId: string; tasks: Task[]; onClose: () => void }) {
-  const { t } = useTranslation();
+  const { locale, t } = useTranslation();
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [summary, setSummary] = useState<DiffSummary | null>(null);
   const [growth, setGrowth] = useState<DiffKeyResult | null>(null);
@@ -432,6 +435,7 @@ function DiffAnalysis({ diffId, tasks, onClose }: { diffId: string; tasks: Task[
       {summary.kubernetesAvailable && objects && <><h3>{t('comparison.objectGrowth')}</h3><div className="table-wrap"><table><thead><tr><th>{t('audit.object')}</th><th>{t('audit.resource')}</th><th>{t('audit.namespace')}</th><th>{t('comparison.current')}</th><th>{t('comparison.history')}</th><th>{t('comparison.revisionDelta')}</th></tr></thead><tbody>{objects.items.map((item) => <tr key={item.keyHash}><td>{item.displayName}</td><td>{item.apiGroup || t('value.core')}/{item.resource}</td><td>{item.namespace || t('value.clusterScoped')}</td><td>{formatSignedBytes(item.currentBytesDelta)}</td><td>{formatSignedBytes(item.historicalBytesDelta)}</td><td>{formatSigned(item.revisionCountDelta)}</td></tr>)}</tbody></table></div></>}
       <DiffAuditEvidencePanel comparison={comparison} tasks={tasks} />
       <DiffLogEvidencePanel comparison={comparison} tasks={tasks} />
+      <DiffMetricsEvidencePanel comparison={comparison} tasks={tasks} locale={locale} t={t} />
     </>}
   </section>;
 }

@@ -59,9 +59,15 @@ progress { width: 7rem; accent-color: #276448; }
 .hash { overflow-wrap: anywhere; color: #526158; font-family: ui-monospace, monospace; }
 .evidence-hash { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 .evidence-meta { color: #526158; }
+.curve-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; margin: 1rem 0; }
+.curve-grid figure { margin: 0; padding: .65rem; border: 1px solid #dce4de; border-radius: .55rem; }
+.curve-grid figcaption { font: 700 .75rem ui-monospace, monospace; color: #526158; }
+.metric-curve { display: block; width: 100%; height: 7rem; }
+.metric-curve path { fill: none; stroke: #276448; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 @media (max-width: 900px) { .task-form { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px) { .metrics, .filters { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px) { .log-filters { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px) { .ranking-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .curve-grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 560px) { .header { flex-direction: column; }.task-form, .metrics, .filters { grid-template-columns: 1fr; }.shell { padding-top: 1.5rem; } }

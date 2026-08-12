@@ -22,7 +22,7 @@ export interface Task {
 export interface CreateTask {
   name: string;
   inputPath: string;
-  inputType: 'snapshot' | 'raw-db' | 'log' | 'audit';
+  inputType: 'snapshot' | 'raw-db' | 'log' | 'audit' | 'metrics';
   etcdVersion: string;
 }
 
@@ -86,6 +86,24 @@ export interface LogTimeline {
 }
 
 export type EvidenceCoverage = 'full' | 'partial' | 'none' | 'unknown';
+
+export type MetricType = 'db_total_bytes' | 'db_in_use_bytes' | 'quota_bytes' | 'put_total' | 'delete_total' | 'backend_commit_seconds' | 'wal_fsync_seconds';
+export interface MetricPoint { observedAt: string; value: number }
+export interface MetricCurve { metricType: MetricType; points: MetricPoint[] }
+export interface MetricSeries { series: { metricType: MetricType; sourceMetricName: string; instance: string; job: string; memberId: string; histogramLe?: number; seriesHash: string }; samples: MetricPoint[] }
+export interface MetricsSummary { totalSeries: number; supportedSeries: number; unsupportedSeries: number; totalSamples: number; validSamples: number; discardedSamples: number; firstObservedAt?: string; lastObservedAt?: string; instanceCount: number; metricTypes: MetricType[] }
+export interface MetricsTimeline { summary: MetricsSummary; series: MetricSeries[]; total: number; curves: MetricCurve[]; page: number; pageSize: number }
+export interface MetricPeak { observedAt: string; value: number }
+export interface MetricsEvidence {
+  diffId: string; metricsTaskId: string; metricsTaskName: string; metricsTaskSha256: string;
+  from: string; to: string; windowSeconds: number; coverage: EvidenceCoverage;
+  sourceCompatibility: 'unverified'; evidenceOnly: true; causalityEstablished: false;
+  growthMetric: MetricType; growthBaselineBytes: number; growthThresholdBytes: number; growthStartedAt?: string;
+  dbTotalDeltaBytes: number; dbInUseDeltaBytes: number; maxDefragReclaimableBytes: number; quotaPeakRatio: number;
+  largestGrowthInterval?: { from: string; to: string; deltaBytes: number };
+  peakPutRate: MetricPeak; peakDeleteRate: MetricPeak; putTemporallyAligned: boolean; deleteTemporallyAligned: boolean;
+  backendCommitP99: MetricPeak; walFsyncP99: MetricPeak; curves: MetricCurve[];
+}
 
 export interface EvidenceCount {
   name: string;
@@ -506,6 +524,13 @@ export function getAuditTimeline(id: string, query: { from?: string; to?: string
   return request(`/api/v1/tasks/${encodeURIComponent(id)}/audit-timeline${suffix}`);
 }
 
+export function getMetricsTimeline(id: string, query: { from?: string; to?: string; metricType?: MetricType | ''; instance?: string; page?: number; pageSize?: number } = {}): Promise<MetricsTimeline> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value));
+  const suffix = params.toString() ? `?${params}` : '';
+  return request(`/api/v1/tasks/${encodeURIComponent(id)}/metrics-timeline${suffix}`);
+}
+
 export function listPages(id: string, page: number, pageType: string): Promise<PageResult> {
   const query = new URLSearchParams({ page: String(page), pageSize: '50', sort: 'page_id' });
   if (pageType) query.set('type', pageType);
@@ -598,6 +623,11 @@ export function getDiffLogEvidence(diffId: string, logTaskId: string, page: numb
 export function getDiffAuditEvidence(diffId: string, auditTaskId: string, page: number): Promise<AuditEvidence> {
   const query = new URLSearchParams({ auditTaskId, page: String(page), pageSize: '50' });
   return request(`/api/v1/diffs/${encodeURIComponent(diffId)}/audit-evidence?${query}`);
+}
+
+export function getMetricsEvidence(diffId: string, metricsTaskId: string): Promise<MetricsEvidence> {
+  const query = new URLSearchParams({ metricsTaskId });
+  return request(`/api/v1/diffs/${encodeURIComponent(diffId)}/metrics-evidence?${query}`);
 }
 
 export function listDiffObjects(id: string): Promise<DiffObjectResult> {

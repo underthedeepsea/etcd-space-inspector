@@ -116,6 +116,26 @@ for (const key of auditKeys) {
   for (const locale of ['zh', 'en'] as const) assert.ok(text(locale, key).length > 0);
 }
 
+const metricsKeys: TextKey[] = [
+  'form.metrics', 'form.metricsHint', 'type.metrics', 'metrics.title', 'metrics.loadFailed',
+  'metrics.allTypes', 'metrics.instance', 'metrics.series', 'metrics.samples', 'metrics.empty',
+  'metricsEvidence.title', 'metricsEvidence.select', 'metricsEvidence.none', 'metricsEvidence.loadFailed',
+  'metricsEvidence.growthStart', 'metricsEvidence.growthInterval', 'metricsEvidence.coverage',
+  'metricsEvidence.sourceUnverified', 'metricsEvidence.causality', 'metricsEvidence.counterGap',
+  'metricsEvidence.reclaimableCaveat', 'metricsEvidence.aligned', 'metricsEvidence.notAligned',
+];
+for (const key of metricsKeys) {
+  for (const locale of ['zh', 'en'] as const) assert.ok(text(locale, key).length > 0);
+}
+
+for (const key of ['metrics.supportedSeries', 'metrics.validSamples', 'metrics.instances', 'metrics.dbDelta', 'metrics.inUseDelta', 'metrics.reclaimable', 'metrics.quotaRatio', 'metrics.putRate', 'metrics.deleteRate', 'metrics.backendP99', 'metrics.walP99'] as const) {
+  for (const locale of ['zh', 'en'] as const) {
+    const copy = metric(locale, key);
+    assert.ok(copy.label.length > 0);
+    assert.ok(copy.help.length > 0);
+  }
+}
+
 for (const key of ['audit.totalLines', 'audit.validEvents', 'audit.writeEvents', 'audit.unknownLines', 'audit.parseErrors', 'audit.candidates', 'audit.exactMatches', 'audit.payloadBytes'] as const) {
   for (const locale of ['zh', 'en'] as const) {
     const copy = metric(locale, key);

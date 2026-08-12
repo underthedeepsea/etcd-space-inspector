@@ -103,7 +103,11 @@ func AnalyzeWindow(input WindowInput) Evidence {
 	for _, item := range []struct {
 		metric MetricType
 		points []CurvePoint
-	}{{MetricDBTotal, dbTotal}, {MetricDBInUse, dbInUse}, {MetricQuota, clusterGauge(input, MetricQuota, false)}} {
+	}{
+		{MetricDBTotal, dbTotal}, {MetricDBInUse, dbInUse}, {MetricQuota, clusterGauge(input, MetricQuota, false)},
+		{MetricPutTotal, counterRateCurve(input, MetricPutTotal)}, {MetricDeleteTotal, counterRateCurve(input, MetricDeleteTotal)},
+		{MetricBackendCommit, histogramCurve(input, MetricBackendCommit, .99)}, {MetricWALFsync, histogramCurve(input, MetricWALFsync, .99)},
+	} {
 		if len(item.points) > 0 {
 			result.Curves = append(result.Curves, Curve{MetricType: item.metric, Points: downsample(item.points, 600)})
 		}
@@ -243,7 +247,11 @@ func largestGrowth(points []CurvePoint, median time.Duration) *Interval {
 }
 
 func peakCounterRate(input WindowInput, metric MetricType) Peak {
-	var result Peak
+	return curvePeak(counterRateCurve(input, metric))
+}
+
+func counterRateCurve(input WindowInput, metric MetricType) []CurvePoint {
+	byTime := make(map[time.Time]float64)
 	for _, series := range input.Series {
 		if series.Series.MetricType != metric {
 			continue
@@ -265,12 +273,12 @@ func peakCounterRate(input WindowInput, metric MetricType) Peak {
 				continue
 			}
 			rate := delta / duration.Seconds()
-			if rate > result.Value {
-				result = Peak{ObservedAt: points[index].ObservedAt, Value: rate}
+			if rate > byTime[points[index].ObservedAt] {
+				byTime[points[index].ObservedAt] = rate
 			}
 		}
 	}
-	return result
+	return orderedCurve(byTime)
 }
 
 func quotaRatio(input WindowInput, db []CurvePoint) float64 {
@@ -324,11 +332,15 @@ func aligned(at time.Time, interval Interval, tolerance time.Duration) bool {
 }
 
 func histogramPeak(input WindowInput, metric MetricType, quantile float64) Peak {
+	return curvePeak(histogramCurve(input, metric, quantile))
+}
+
+func histogramCurve(input WindowInput, metric MetricType, quantile float64) []CurvePoint {
 	type bucketDelta struct {
 		upper float64
 		count float64
 	}
-	byTime := make(map[time.Time][]bucketDelta)
+	byTime := make(map[time.Time]map[float64]float64)
 	for _, series := range samplesInWindow(input, metric) {
 		if series.Series.HistogramLE == nil {
 			continue
@@ -340,11 +352,21 @@ func histogramPeak(input WindowInput, metric MetricType, quantile float64) Peak 
 			if delta < 0 {
 				continue
 			}
-			byTime[points[index].ObservedAt] = append(byTime[points[index].ObservedAt], bucketDelta{upper: *series.Series.HistogramLE, count: delta})
+			if points[index].ObservedAt.Before(input.From) || points[index].ObservedAt.After(input.To) {
+				continue
+			}
+			if byTime[points[index].ObservedAt] == nil {
+				byTime[points[index].ObservedAt] = make(map[float64]float64)
+			}
+			byTime[points[index].ObservedAt][*series.Series.HistogramLE] += delta
 		}
 	}
-	var result Peak
-	for observed, buckets := range byTime {
+	values := make(map[time.Time]float64)
+	for observed, counts := range byTime {
+		buckets := make([]bucketDelta, 0, len(counts))
+		for upper, count := range counts {
+			buckets = append(buckets, bucketDelta{upper: upper, count: count})
+		}
 		sort.Slice(buckets, func(i, j int) bool { return buckets[i].upper < buckets[j].upper })
 		if len(buckets) == 0 || buckets[len(buckets)-1].count <= 0 {
 			continue
@@ -365,8 +387,25 @@ func histogramPeak(input WindowInput, metric MetricType, quantile float64) Peak 
 			}
 			lower, previous = bucket.upper, bucket.count
 		}
-		if value > result.Value {
-			result = Peak{ObservedAt: observed, Value: value}
+		values[observed] = value
+	}
+	return orderedCurve(values)
+}
+
+func orderedCurve(values map[time.Time]float64) []CurvePoint {
+	result := make([]CurvePoint, 0, len(values))
+	for observed, value := range values {
+		result = append(result, CurvePoint{ObservedAt: observed, Value: value})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ObservedAt.Before(result[j].ObservedAt) })
+	return result
+}
+
+func curvePeak(points []CurvePoint) Peak {
+	var result Peak
+	for _, point := range points {
+		if point.Value > result.Value {
+			result = Peak{ObservedAt: point.ObservedAt, Value: point.Value}
 		}
 	}
 	return result
