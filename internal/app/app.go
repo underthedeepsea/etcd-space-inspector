@@ -194,7 +194,23 @@ func (a *Application) Get(ctx context.Context, id string) (task.Task, error) {
 	if err := ctx.Err(); err != nil {
 		return task.Task{}, err
 	}
-	return a.manifests.Get(id)
+	item, err := a.manifests.Get(id)
+	if err != nil {
+		return task.Task{}, err
+	}
+	if item.Status == task.StatusCompleted || item.Status == task.StatusFailed || item.Status == task.StatusCancelled {
+		a.mu.Lock()
+		handle, running := a.running[id]
+		a.mu.Unlock()
+		if running {
+			select {
+			case <-handle.done:
+			case <-ctx.Done():
+				return task.Task{}, ctx.Err()
+			}
+		}
+	}
+	return item, nil
 }
 
 // Start begins analysis in the background.

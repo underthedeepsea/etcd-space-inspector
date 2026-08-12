@@ -74,7 +74,23 @@ func (a *Application) GetDiff(ctx context.Context, id string) (domain.Comparison
 	if err := ctx.Err(); err != nil {
 		return domain.Comparison{}, err
 	}
-	return a.diffs.Get(id)
+	item, err := a.diffs.Get(id)
+	if err != nil {
+		return domain.Comparison{}, err
+	}
+	if item.Status == domain.StatusCompleted || item.Status == domain.StatusFailed || item.Status == domain.StatusCancelled {
+		a.mu.Lock()
+		handle, running := a.runningDiffs[id]
+		a.mu.Unlock()
+		if running {
+			select {
+			case <-handle.done:
+			case <-ctx.Done():
+				return domain.Comparison{}, ctx.Err()
+			}
+		}
+	}
+	return item, nil
 }
 
 func (a *Application) startDiff(item domain.Comparison) error {

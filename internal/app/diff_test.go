@@ -73,6 +73,34 @@ func TestApplicationRunsQueriesAndDeletesDiff(t *testing.T) {
 	}
 }
 
+func TestGetDiffWaitsForTerminalCleanup(t *testing.T) {
+	application := NewM5(filepath.Join(t.TempDir(), "data"), 2, 1, 1)
+	item, err := application.diffs.Create(domain.CreateRequest{Name: "cleanup-diff", BaselineTaskID: "base", TargetTaskID: "target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.Status = domain.StatusCompleted
+	if err := application.diffs.Save(item); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	application.runningDiffs[item.ID] = runHandle{done: done}
+	returned := make(chan error, 1)
+	go func() {
+		_, err := application.GetDiff(context.Background(), item.ID)
+		returned <- err
+	}()
+	select {
+	case err := <-returned:
+		t.Fatalf("GetDiff returned before cleanup completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(done)
+	if err := <-returned; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestApplicationCancelRejectsNonRunningDiff(t *testing.T) {
 	application := NewM5(filepath.Join(t.TempDir(), "data"), 10, 1, 1)
 	if err := application.CancelDiff("missing"); err == nil {
