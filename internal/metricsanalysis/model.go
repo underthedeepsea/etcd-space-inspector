@@ -54,3 +54,15 @@ type Timeline struct {
 	Total   int             `json:"total"`
 	Curves  []Curve         `json:"curves"`
 }
+
+// DiffEvidence attaches deterministic metric evidence to one comparison window.
+type DiffEvidence struct {
+	DiffID            string    `json:"diffId"`
+	MetricsTaskID     string    `json:"metricsTaskId"`
+	MetricsTaskName   string    `json:"metricsTaskName"`
+	MetricsTaskSHA256 string    `json:"metricsTaskSha256"`
+	From              time.Time `json:"from"`
+	To                time.Time `json:"to"`
+	WindowSeconds     int64     `json:"windowSeconds"`
+	Evidence
+}

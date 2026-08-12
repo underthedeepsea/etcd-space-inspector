@@ -239,6 +239,32 @@ func (r *MetricsRepository) Window(ctx context.Context, query MetricsQuery) ([]m
 	return page.Series, err
 }
 
+// EvidenceWindow includes one predecessor sample per series for boundary rates.
+func (r *MetricsRepository) EvidenceWindow(ctx context.Context, from, to time.Time) ([]metricsanalysis.SeriesSamples, error) {
+	page, err := r.seriesSamples(ctx, MetricsQuery{From: &from, To: &to}, false)
+	if err != nil {
+		return nil, err
+	}
+	for index := range page.Series {
+		var observed string
+		var value float64
+		err := r.db.QueryRowContext(ctx, `SELECT s.observed_at,s.value FROM metric_samples s JOIN metric_series r ON r.series_id=s.series_id
+WHERE s.task_id=? AND r.series_hash=? AND s.observed_at<? ORDER BY s.observed_at DESC LIMIT 1`, r.taskID, page.Series[index].Series.SeriesHash, formatTime(from)).Scan(&observed, &value)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("select metric predecessor: %w", err)
+		}
+		at, err := time.Parse(time.RFC3339Nano, observed)
+		if err != nil {
+			return nil, err
+		}
+		page.Series[index].Samples = append([]metricsanalysis.Sample{{ObservedAt: at, Value: value}}, page.Series[index].Samples...)
+	}
+	return page.Series, nil
+}
+
 func (r *MetricsRepository) seriesSamples(ctx context.Context, query MetricsQuery, paged bool) (MetricsSeriesPage, error) {
 	where := []string{"r.task_id=?"}
 	args := []any{r.taskID}

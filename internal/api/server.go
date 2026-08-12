@@ -68,6 +68,7 @@ type DiffService interface {
 	DiffNamespaces(context.Context, string, storage.DiffDeltaQuery) ([]domain.NamespaceDelta, error)
 	DiffLogEvidence(context.Context, string, string, storage.LogQuery) (loganalysis.DiffEvidence, error)
 	DiffAuditEvidence(context.Context, string, string, storage.AuditQuery) (auditanalysis.Evidence, error)
+	MetricsEvidence(context.Context, string, string) (metricsanalysis.DiffEvidence, error)
 }
 
 // LogService is the structured log timeline query boundary.

@@ -244,7 +244,10 @@ func largestGrowth(points []CurvePoint, median time.Duration) *Interval {
 
 func peakCounterRate(input WindowInput, metric MetricType) Peak {
 	var result Peak
-	for _, series := range samplesInWindow(input, metric) {
+	for _, series := range input.Series {
+		if series.Series.MetricType != metric {
+			continue
+		}
 		points := append([]Sample(nil), series.Samples...)
 		sort.Slice(points, func(i, j int) bool { return points[i].ObservedAt.Before(points[j].ObservedAt) })
 		curve := make([]CurvePoint, len(points))
@@ -253,6 +256,9 @@ func peakCounterRate(input WindowInput, metric MetricType) Peak {
 		}
 		median := medianInterval(curve)
 		for index := 1; index < len(points); index++ {
+			if points[index].ObservedAt.Before(input.From) || points[index].ObservedAt.After(input.To) {
+				continue
+			}
 			duration := points[index].ObservedAt.Sub(points[index-1].ObservedAt)
 			delta := points[index].Value - points[index-1].Value
 			if duration <= 0 || delta < 0 || median > 0 && duration > 3*median {
