@@ -136,6 +136,36 @@ func TestRunAnalyzeHelpListsLogInput(t *testing.T) {
 	}
 }
 
+// Omitting the Audit branch in the CLI would send JSONL through bbolt stages
+// even though the application supports the task type.
+func TestRunAnalyzeAuditTask(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "audit.jsonl")
+	if err := os.WriteFile(source, []byte(`{"auditID":"one","stage":"ResponseComplete","stageTimestamp":"2026-08-12T01:00:00Z","verb":"update","objectRef":{"apiVersion":"v1","resource":"configmaps","namespace":"default","name":"cm"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "data")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"analyze", "--input", source, "--type", "audit", "--output", output}, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), "completed") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	manifests, err := filepath.Glob(filepath.Join(output, "tasks", "*", "manifest.json"))
+	if err != nil || len(manifests) != 1 {
+		t.Fatalf("manifests=%v err=%v", manifests, err)
+	}
+	manifest, err := os.ReadFile(manifests[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(manifest, []byte(`"inputFile": "source/input.audit"`)) || !bytes.Contains(manifest, []byte(`"currentStage": "completed"`)) {
+		t.Fatalf("manifest=%s", manifest)
+	}
+	if helpCode := run([]string{"analyze", "--help"}, &stdout, &stderr); helpCode != 0 || !strings.Contains(stderr.String(), "audit") {
+		t.Fatalf("helpCode=%d help=%q", helpCode, stderr.String())
+	}
+}
+
 func TestRunRejectsUnknownCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"unknown"}, &stdout, &stderr); code != 2 {

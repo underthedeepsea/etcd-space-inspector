@@ -118,6 +118,44 @@ func TestServiceCreatesLogTaskWithoutDatabaseVersionDetection(t *testing.T) {
 	}
 }
 
+// Treating Audit data as a database would invoke bbolt version detection and
+// store it under the wrong source name, breaking the independent task model.
+func TestServiceCreatesAuditTaskWithoutDatabaseVersionDetection(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "audit.jsonl")
+	if err := os.WriteFile(source, []byte(`{"auditID":"one","verb":"update"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(filepath.Join(root, "data"))
+	created, err := svc.Create(context.Background(), CreateRequest{
+		Name: "audit", SourcePath: source, InputType: "audit", MaxInputBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.InputType != "audit" || created.SourcePath != "source/input.audit" || created.SchemaVersion != 3 ||
+		created.EtcdVersion != "" || created.EtcdVersionSource != VersionSourceUnknown || created.DetectedEtcdVersion != "" {
+		t.Fatalf("created=%+v", created)
+	}
+	if _, err := os.Stat(filepath.Join(svc.TaskDir(created.ID), "source", "input.audit")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceRejectsUnknownInputType(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "input")
+	if err := os.WriteFile(source, []byte("input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewService(filepath.Join(root, "data")).Create(context.Background(), CreateRequest{
+		Name: "unknown", SourcePath: source, InputType: "metrics", MaxInputBytes: 1024,
+	})
+	if err == nil {
+		t.Fatal("expected unknown input type error")
+	}
+}
+
 func clusterVersionSource(t *testing.T, root, version string) string {
 	t.Helper()
 	path := filepath.Join(root, "etcd.db")
