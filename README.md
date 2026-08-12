@@ -1,6 +1,6 @@
 # etcd Space Inspector
 
-etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。它支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析、Key 保留 revision 活跃度、两个已完成 Snapshot 任务之间的持久化空间差分、独立的 etcd 日志时间线，以及 Kubernetes Audit 写入来源证据匹配。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
+etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。它支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析、Key 保留 revision 活跃度、两个已完成 Snapshot 任务之间的持久化空间差分、独立的 etcd 日志时间线、Kubernetes Audit 写入来源证据，以及 Prometheus 核心指标时间关联。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
 
 发布版本、对应标签和分支规则见 [RELEASE.md](RELEASE.md)。
 
@@ -77,6 +77,12 @@ bin/etcd-analyzer analyze \
 bin/etcd-analyzer analyze \
   --input ./kube-apiserver-audit.jsonl.gz \
   --type audit \
+  --output ./analysis-data
+
+# 导入 Prometheus HTTP API query_range 的 success/matrix JSON
+bin/etcd-analyzer analyze \
+  --input ./etcd-metrics.json \
+  --type metrics \
   --output ./analysis-data
 
 # 比较两个已完成的分析任务
@@ -167,6 +173,28 @@ GET /api/v1/diffs/{diffId}/audit-evidence?auditTaskId=<id>&page=1&pageSize=100
 
 窗口固定为 `(baselineObservedAt,targetObservedAt]`。high 表示 Audit 对象哈希精确命中正增长对象；medium 表示正增长 Resource 与 Namespace 同时命中；low 表示只命中 Resource 或 Namespace；unverified 事件只保留在时间线，不进入候选排行。候选按用户、客户端和来源网段的不可逆指纹聚合。由于 Snapshot 与 Audit 没有可信 Cluster ID，`sourceCompatibility` 始终为 `unverified`；匹配属于结构证据，不代表责任或因果已经证明。
 
+## 核心指标与 Snapshot 时间关联
+
+`metrics` 任务只读取本地 Prometheus HTTP API `query_range` 成功 `matrix` JSON，不连接 Prometheus。支持 DB total、DB in-use、backend quota、MVCC put/delete Counter、backend commit histogram 和 WAL fsync histogram 的 etcd 稳定指标名，并兼容相应 3.4 debugging 别名；新旧别名同时存在时优先稳定名。
+
+指标时间线接口为：
+
+```text
+GET /api/v1/tasks/{taskId}/metrics-timeline?from=<RFC3339>&to=<RFC3339>&metricType=<type>&instance=<instance>&page=1&pageSize=100
+```
+
+带实际采集时间的双 Snapshot 差分可关联一个已完成 metrics 任务：
+
+```text
+GET /api/v1/diffs/{diffId}/metrics-evidence?metricsTaskId=<id>
+```
+
+增长起点定义为超过 `max(8 MiB, 窗口基线的 1%)` 并连续保持三个样本。多 Member 的 DB total/in-use 取同一时刻最大值，quota 取最小正值，不把 Member 容量相加。Put/Delete 速率按 Counter 相邻非负增量计算；Counter 重置和超过中位采样间隔三倍的缺口区间会被跳过。直方图先合并同一时刻、同一 bucket 的 Member 增量，再估算 P99。
+
+`db_total - db_in_use` 只在同一实例、同一采样时刻计算，是 defrag 后可能释放的物理差值，不是 compaction 可释放空间，也不是保证回收量。指标来源与 Snapshot 的集群一致性始终标记为 `unverified`，时间重合不代表因果。工具不会自动提高 quota，也不会执行 compact 或 defrag。
+
+原始 JSON 只保存在任务的 `source/input.metrics`。标准化数据库与 API 仅保留固定指标、数值和 `instance`、`job`、`member_id`、`le` 白名单标签，不保存原始查询、URL、认证信息、未知标签或完整响应。
+
 ## 数据目录
 
 ```text
@@ -175,7 +203,7 @@ analysis-data/
 │   └── <task-id>/
 │       ├── manifest.json
 │       ├── task.db
-│       ├── source/input.db（Snapshot/raw-db）、source/input.log（日志）或 source/input.audit（Audit）
+│       ├── source/input.db（Snapshot/raw-db）、source/input.log（日志）、source/input.audit（Audit）或 source/input.metrics（指标）
 │       ├── exports/report.html
 │       └── logs/
 └── diffs/
@@ -213,6 +241,7 @@ analysis-data/
 - `GET /api/v1/tasks/{id}/objects/{object-id}/revisions`
 - `GET /api/v1/tasks/{id}/timeline`
 - `GET /api/v1/tasks/{id}/audit-timeline`
+- `GET /api/v1/tasks/{id}/metrics-timeline`
 - `POST /api/v1/diffs`
 - `GET /api/v1/diffs`
 - `GET /api/v1/diffs/{id}`
@@ -224,6 +253,7 @@ analysis-data/
 - `GET /api/v1/diffs/{id}/objects`
 - `GET /api/v1/diffs/{id}/log-evidence`
 - `GET /api/v1/diffs/{id}/audit-evidence`
+- `GET /api/v1/diffs/{id}/metrics-evidence`
 - `POST /api/v1/diffs/{id}/cancel`
 - `DELETE /api/v1/diffs/{id}`
 

@@ -4,7 +4,8 @@
 
 | 版本与标签 | 发布分支 | 里程碑 | 主要能力 |
 | --- | --- | --- | --- |
-| `0.10.0` / `v0.10.0`（待发布） | `release/0.10.0` | M10 Audit 写入来源证据 | 独立 Kubernetes Audit JSONL/gzip 任务、对象级 Snapshot 差分，以及 `(baseline,target]` 窗口内按对象、Resource、Namespace 匹配的 high/medium/low 候选写入主体；原始对象、URI、完整 IP/UA 不进入标准化产物，来源一致性始终标为未验证。 |
+| `0.11.0` / `v0.11.0`（待发布） | `release/0.11.0` | M11 核心指标时间关联 | 本地 Prometheus query_range matrix 导入、七类 etcd 核心指标时间线，以及双 Snapshot 实际采集窗口内的增长起点、Counter 峰值、quota、可能的 defrag 差值和延迟 P99 证据；来源一致性未经验证，时间重合不作为因果证明。 |
+| `0.10.0` / `v0.10.0` | `release/0.10.0` | M10 Audit 写入来源证据 | 独立 Kubernetes Audit JSONL/gzip 任务、对象级 Snapshot 差分，以及 `(baseline,target]` 窗口内按对象、Resource、Namespace 匹配的 high/medium/low 候选写入主体；原始对象、URI、完整 IP/UA 不进入标准化产物，来源一致性始终标为未验证。 |
 | `0.9.0` / `v0.9.0` | `release/0.9.0` | M9 日志窗口关联 | 将一个已完成日志任务与双 Snapshot 的实际采集窗口关联，按事件类型、严重度和来源汇总时间重合证据，并展示来源未验证与日志覆盖状态；不包含 Audit、Prometheus 或责任归因。 |
 | `0.8.0` / `v0.8.0` | `release/0.8.0` | M8 日志时间线 | 独立 etcd 日志任务：流式识别多种文本/JSON/CRI/systemd/gzip 日志，保存脱敏结构化事件，提供中英文时间线 API 与 Web UI；不包含 Audit/Prometheus 或责任归因。 |
 | `0.7.0` / `v0.7.0` | `release/0.7.0` | M7 Key 活跃度 | 单 Snapshot 的 Key 保留 revision 活跃度排行；双 Snapshot 的按 Key revision 增量与基于实际采集时间的每小时净保留 revision 速率。 |
