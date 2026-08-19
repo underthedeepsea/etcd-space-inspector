@@ -110,6 +110,99 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Task, erro
 	return created, nil
 }
 
+// PrepareImport creates a task without copying its external source.
+func (s *Service) PrepareImport(ctx context.Context, request CreateRequest) (Task, error) {
+	if err := ctx.Err(); err != nil {
+		return Task{}, err
+	}
+	if strings.TrimSpace(request.Name) == "" {
+		return Task{}, fmt.Errorf("task name is required")
+	}
+	if request.InputType != "snapshot" && request.InputType != "raw-db" {
+		return Task{}, fmt.Errorf("async import supports snapshot or raw-db")
+	}
+	info, err := os.Lstat(request.SourcePath)
+	if err != nil {
+		return Task{}, fmt.Errorf("inspect input: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return Task{}, fmt.Errorf("input must be a regular non-symlink file")
+	}
+	if request.MaxInputBytes <= 0 || info.Size() > request.MaxInputBytes {
+		return Task{}, fmt.Errorf("input exceeds %d bytes", request.MaxInputBytes)
+	}
+	id, err := newID()
+	if err != nil {
+		return Task{}, fmt.Errorf("create task id: %w", err)
+	}
+	dir := s.TaskDir(id)
+	if err := os.MkdirAll(filepath.Join(dir, "source"), 0o700); err != nil {
+		return Task{}, fmt.Errorf("create task source directory: %w", err)
+	}
+	for _, name := range []string{"exports", "logs"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+			_ = os.RemoveAll(dir)
+			return Task{}, fmt.Errorf("create task %s directory: %w", name, err)
+		}
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.RemoveAll(dir)
+		}
+	}()
+	item := Task{
+		ID: id, Name: strings.TrimSpace(request.Name), InputType: request.InputType,
+		EtcdVersion: strings.TrimSpace(request.EtcdVersion), EtcdVersionSource: VersionSourceUnknown,
+		EtcdVersionExact: etcdversion.IsExact(strings.TrimSpace(request.EtcdVersion)),
+		SourceSize:       info.Size(), Status: StatusImporting, CreatedAt: time.Now().UTC(), SchemaVersion: 1,
+	}
+	if item.EtcdVersion != "" {
+		item.EtcdVersionSource = VersionSourceManual
+	}
+	if err := writeImportRequest(filepath.Join(dir, "import-request.json"), ImportRequest{SourcePath: request.SourcePath, MaxInputBytes: request.MaxInputBytes}); err != nil {
+		return Task{}, err
+	}
+	if err := s.writeManifest(item); err != nil {
+		return Task{}, err
+	}
+	complete = true
+	return item, nil
+}
+
+// ReadImportRequest reads the private source request for an active import.
+func (s *Service) ReadImportRequest(id string) (ImportRequest, error) {
+	if err := validID(id); err != nil {
+		return ImportRequest{}, err
+	}
+	file, err := os.Open(filepath.Join(s.TaskDir(id), "import-request.json"))
+	if err != nil {
+		return ImportRequest{}, fmt.Errorf("read import request: %w", err)
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	var request ImportRequest
+	if err := decoder.Decode(&request); err != nil {
+		return ImportRequest{}, fmt.Errorf("decode import request: %w", err)
+	}
+	if request.SourcePath == "" || request.MaxInputBytes <= 0 {
+		return ImportRequest{}, fmt.Errorf("invalid import request")
+	}
+	return request, nil
+}
+
+// RemoveImportRequest deletes the private source request after a run ends.
+func (s *Service) RemoveImportRequest(id string) error {
+	if err := validID(id); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(s.TaskDir(id), "import-request.json")); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove import request: %w", err)
+	}
+	return nil
+}
+
 // Get reads one task manifest.
 func (s *Service) Get(id string) (Task, error) {
 	if err := validID(id); err != nil {
@@ -291,6 +384,17 @@ func (s *Service) writeManifest(item Task) error {
 	}
 	if err := os.Rename(temporary, path); err != nil {
 		return fmt.Errorf("replace task manifest: %w", err)
+	}
+	return nil
+}
+
+func writeImportRequest(path string, request ImportRequest) error {
+	data, err := json.MarshalIndent(request, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode import request: %w", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write import request: %w", err)
 	}
 	return nil
 }

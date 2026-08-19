@@ -11,12 +11,21 @@ import (
 	"strings"
 	"time"
 
+	"etcd-analyzer/internal/app"
+	"etcd-analyzer/internal/task"
 	"etcd-analyzer/internal/worker"
 )
 
 var (
-	workerStdin        io.Reader = os.Stdin
-	workerRunOperation           = func(context.Context, worker.Request) error { return nil }
+	workerStdin   io.Reader = os.Stdin
+	workerDataDir string
+	workerRunOperation = func(ctx context.Context, request worker.Request) error {
+		manifests := task.NewService(workerDataDir)
+		if request.Mode == worker.ModeImport {
+			return app.RunImportWorker(ctx, manifests, request)
+		}
+		return fmt.Errorf("analysis worker is not configured")
+	}
 )
 
 func runWorker(args []string, stdout, stderr io.Writer) (exitCode int) {
@@ -37,6 +46,7 @@ func runWorker(args []string, stdout, stderr io.Writer) (exitCode int) {
 		return 2
 	}
 	taskDir := filepath.Join(*dataDir, "tasks", *taskID)
+	workerDataDir = *dataDir
 	request, err := worker.ReadRequest(taskDir, *taskID, *runID)
 	if err != nil {
 		fmt.Fprintln(stderr, "read worker request failed")

@@ -27,3 +27,9 @@ type Progress struct {
 	ElapsedSeconds            int64      `json:"elapsedSeconds,omitempty"`
 	EstimatedRemainingSeconds *int64     `json:"estimatedRemainingSeconds,omitempty"`
 }
+
+// ImportRequest contains the only external path kept for an active import.
+type ImportRequest struct {
+	SourcePath    string `json:"sourcePath"`
+	MaxInputBytes int64  `json:"maxInputBytes"`
+}

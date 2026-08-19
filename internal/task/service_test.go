@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,6 +191,42 @@ func TestServiceRejectsUnknownInputType(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unknown input type error")
 	}
+}
+
+func TestPrepareImportKeepsExternalPathPrivate(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source.db")
+	if err := os.WriteFile(source, []byte("input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(filepath.Join(root, "data"))
+	item, err := svc.PrepareImport(context.Background(), CreateRequest{
+		Name: "async", SourcePath: source, InputType: "snapshot", EtcdVersion: "3.4.13", MaxInputBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Status != StatusImporting || item.SourcePath != "" || item.SourceSize != 5 || item.EtcdVersion != "3.4.13" {
+		t.Fatalf("prepared=%+v", item)
+	}
+	manifest, err := os.ReadFile(filepath.Join(svc.TaskDir(item.ID), "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(manifest) == "" || string(manifest) == source || containsText(string(manifest), source) {
+		t.Fatalf("manifest leaked source path: %s", manifest)
+	}
+	request, err := svc.ReadImportRequest(item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.SourcePath != source || request.MaxInputBytes != 1024 {
+		t.Fatalf("request=%+v", request)
+	}
+}
+
+func containsText(value, needle string) bool {
+	return len(needle) > 0 && len(value) >= len(needle) && filepath.Clean(needle) != "" && strings.Contains(value, needle)
 }
 
 func TestServiceRejectsStaleRun(t *testing.T) {
