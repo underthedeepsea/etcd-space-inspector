@@ -30,6 +30,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./check.ps1
+      - name: Check M12 worker lifecycle on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          go test ./internal/worker ./internal/integration -run 'M12Worker|M12Lease|M12Recovery' -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build on Windows
         if: runner.os == 'Windows'
         shell: pwsh

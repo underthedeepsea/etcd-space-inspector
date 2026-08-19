@@ -124,6 +124,16 @@ security:
 
 `workerCount` 是 MVCC/Kubernetes 解码 worker 的上限；默认会取逻辑 CPU 数与 4 的较小值。`channelSize` 限制流水线中的在途记录，避免大 Value 导致不必要的内存峰值。`sqliteBatchSize` 保持 1000，以控制事务写入峰值。`maxInputBytes` 只是输入安全上限，不会提高导入速度。
 
+### M12 大 Snapshot 运行与诊断
+
+`snapshot` 和 `raw-db` 的导入、分析由同一可执行文件的隐藏 Worker 子进程执行；服务进程继续提供 API/UI，Worker 退出不会直接终止服务。服务日志写入 `analysis-data/logs/server.log`，当前任务 run 日志写入 `analysis-data/tasks/<task-id>/logs/<run-id>.log`。日志 API `GET /api/v1/tasks/{id}/logs?tail=200` 只接受 1–200 行，最多读取 256 KiB，并只返回任务目录内的相对路径、大小、修改时间和尾部行。
+
+Snapshot 任务状态依次可能为 `importing`、`pending`、`running`、`completed`、`failed` 或 `cancelled`。任务页展示导入字节进度、MVCC/Kubernetes 子阶段、已处理/总数、速率、耗时、最近心跳、满足 5 秒样本条件时的 ETA 和退出码。已知总量使用原生进度条；未知总量只显示文字状态。取消会关闭 Worker 控制管道，Worker 有限时间内退出；超时则由 Manager 强制终止，并把任务落到终态。
+
+可配置参数有硬上限：`workerCount` 为 1–8，`channelSize` 为 1–4096，`sqliteBatchSize` 为 1–10000，同时分析任务为 1–2。单个 Kubernetes Value 超过 32 MiB、JSON 深度超过 128 或字段节点超过 50,000 时只保留安全元数据；最大字段候选只保留 20 项。Windows PowerShell 的 `check.ps1` 会在完整测试后串行运行 M12 Worker/lease/recovery 聚焦测试，`build.ps1` 生成 `bin\etcd-analyzer.exe`。
+
+M12 不把 Snapshot 差分任务迁移到 Worker；差分仍由父进程管理，Worker 隔离故障不会覆盖差分任务的剩余风险。Kubernetes 流式字段差异和 SQLite statement 复用已加入可选 20,000 修订长测；性能需结合同机数据规模、SQLite 版本和磁盘复测，不能把单次基准当成通用 SLA。
+
 使用示例：
 
 ```bash
@@ -206,6 +216,7 @@ analysis-data/
 │       ├── source/input.db（Snapshot/raw-db）、source/input.log（日志）、source/input.audit（Audit）或 source/input.metrics（指标）
 │       ├── exports/report.html
 │       └── logs/
+├── logs/server.log（服务生命周期与 Worker 管理日志）
 └── diffs/
     └── <diff-id>/
         ├── manifest.json
@@ -221,6 +232,7 @@ analysis-data/
 - `POST /api/v1/tasks`
 - `GET /api/v1/tasks`
 - `GET /api/v1/tasks/{id}`
+- `GET /api/v1/tasks/{id}/logs?tail=200`
 - `POST /api/v1/tasks/{id}/start`
 - `POST /api/v1/tasks/{id}/cancel`
 - `DELETE /api/v1/tasks/{id}`
