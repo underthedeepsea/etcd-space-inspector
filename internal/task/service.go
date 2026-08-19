@@ -169,6 +169,18 @@ func (s *Service) Save(item Task) error {
 	return s.writeManifest(item)
 }
 
+// SaveForRun atomically writes item only when it belongs to the current run.
+func (s *Service) SaveForRun(item Task, runID string) error {
+	current, err := s.Get(item.ID)
+	if err != nil {
+		return err
+	}
+	if current.RunID != runID || item.RunID != runID {
+		return ErrStaleRun
+	}
+	return s.writeManifest(item)
+}
+
 // Cancel records a terminal cancelled state for a pending or running task.
 func (s *Service) Cancel(id string) error {
 	item, err := s.Get(id)
@@ -222,15 +234,46 @@ func (s *Service) writeManifest(item Task) error {
 		return fmt.Errorf("encode task manifest: %w", err)
 	}
 	path := filepath.Join(s.TaskDir(item.ID), "manifest.json")
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, append(data, '\n'), 0o600); err != nil {
+	prefix := "manifest-run-"
+	if item.RunID != "" {
+		prefix += safeTempPart(item.RunID) + "-"
+	}
+	temporaryFile, err := os.CreateTemp(filepath.Dir(path), prefix+"*.tmp")
+	if err != nil {
+		return fmt.Errorf("create task manifest temporary file: %w", err)
+	}
+	temporary := temporaryFile.Name()
+	defer func() { _ = os.Remove(temporary) }()
+	if _, err := temporaryFile.Write(append(data, '\n')); err != nil {
+		_ = temporaryFile.Close()
 		return fmt.Errorf("write task manifest: %w", err)
 	}
+	if err := temporaryFile.Sync(); err != nil {
+		_ = temporaryFile.Close()
+		return fmt.Errorf("sync task manifest: %w", err)
+	}
+	if err := temporaryFile.Close(); err != nil {
+		return fmt.Errorf("close task manifest: %w", err)
+	}
 	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
 		return fmt.Errorf("replace task manifest: %w", err)
 	}
 	return nil
+}
+
+func safeTempPart(value string) string {
+	var result strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			result.WriteRune(r)
+		} else {
+			result.WriteByte('_')
+		}
+	}
+	if result.Len() == 0 {
+		return "unknown"
+	}
+	return result.String()
 }
 
 func newID() (string, error) {

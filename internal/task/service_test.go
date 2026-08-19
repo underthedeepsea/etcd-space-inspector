@@ -2,10 +2,13 @@ package task
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -169,6 +172,75 @@ func TestServiceRejectsUnknownInputType(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected unknown input type error")
+	}
+}
+
+func TestServiceRejectsStaleRun(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source.db")
+	if err := os.WriteFile(source, []byte("input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(filepath.Join(root, "data"))
+	item, err := svc.Create(context.Background(), CreateRequest{
+		Name: "run", SourcePath: source, InputType: "snapshot", MaxInputBytes: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.RunID = "0123456789abcdef"
+	if err := svc.Save(item); err != nil {
+		t.Fatal(err)
+	}
+	before, err := svc.Get(item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := before
+	stale.Name = "stale writer"
+	if err := svc.SaveForRun(stale, "fedcba9876543210"); !errors.Is(err, ErrStaleRun) {
+		t.Fatalf("SaveForRun error=%v, want ErrStaleRun", err)
+	}
+	after, err := svc.Get(item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("stale writer changed manifest: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestTaskProgressJSON(t *testing.T) {
+	heartbeat := time.Date(2026, 8, 19, 1, 2, 3, 4, time.UTC)
+	remaining := int64(42)
+	want := Task{
+		ID: "task", RunID: "0123456789abcdef", RunKind: RunAnalysis, WorkerPID: 123,
+		StageProgress: 0.5, Processed: 10, Total: 20, Unit: "revisions", RatePerSecond: 2,
+		HeartbeatAt: &heartbeat, ElapsedSeconds: 5, EstimatedRemainingSeconds: &remaining,
+		LogFile: "logs/0123456789abcdef.log", ExitCode: 23,
+	}
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Task
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RunID != want.RunID || got.RunKind != want.RunKind || got.WorkerPID != want.WorkerPID ||
+		got.StageProgress != want.StageProgress || got.Processed != want.Processed || got.Total != want.Total ||
+		got.Unit != want.Unit || got.RatePerSecond != want.RatePerSecond || got.ElapsedSeconds != want.ElapsedSeconds ||
+		got.LogFile != want.LogFile || got.ExitCode != want.ExitCode || got.HeartbeatAt == nil ||
+		!got.HeartbeatAt.Equal(heartbeat) || got.EstimatedRemainingSeconds == nil || *got.EstimatedRemainingSeconds != remaining {
+		t.Fatalf("round trip lost progress fields: got=%+v want=%+v", got, want)
+	}
+
+	var legacy Task
+	if err := json.Unmarshal([]byte(`{"taskId":"legacy","status":"pending","progress":0}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.ID != "legacy" || legacy.Status != StatusPending || legacy.RunID != "" || legacy.HeartbeatAt != nil {
+		t.Fatalf("legacy manifest incompatible: %+v", legacy)
 	}
 }
 
