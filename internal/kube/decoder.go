@@ -3,6 +3,7 @@ package kube
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"etcd-analyzer/internal/kube/registry"
@@ -11,6 +12,8 @@ import (
 )
 
 var storageProtobufPrefix = []byte{'k', '8', 's', 0}
+
+const maxSemanticValueBytes = 32 << 20
 
 // Analyzer converts worker-local raw Values into safe Kubernetes summaries.
 type Analyzer struct {
@@ -30,6 +33,11 @@ func (a *Analyzer) Analyze(key []byte, keyHash string, value []byte) *ObjectRevi
 		return nil
 	}
 	result := &ObjectRevision{KeyHash: keyHash, Identity: identity, ValueBytes: int64(len(value))}
+	if len(value) > maxSemanticValueBytes {
+		result.ContentType = "oversized"
+		result.DecodeStatus = StatusOversized
+		return result
+	}
 	if identity.Resource == "" || identity.Name == "" {
 		result.ContentType = "unknown"
 		result.DecodeStatus = StatusPathUnknown
@@ -48,6 +56,10 @@ func (a *Analyzer) Analyze(key []byte, keyHash string, value []byte) *ObjectRevi
 		}
 		fields, err := AnalyzeFields(object)
 		if err != nil {
+			if errors.Is(err, ErrFieldLimitExceeded) {
+				result.DecodeStatus = StatusFieldLimitExceeded
+				return result
+			}
 			result.DecodeStatus = StatusDecodeFailed
 			return result
 		}
@@ -67,6 +79,10 @@ func (a *Analyzer) Analyze(key []byte, keyHash string, value []byte) *ObjectRevi
 		}
 		fields, err := AnalyzeFields(unstructured)
 		if err != nil {
+			if errors.Is(err, ErrFieldLimitExceeded) {
+				result.DecodeStatus = StatusFieldLimitExceeded
+				return result
+			}
 			result.DecodeStatus = StatusDecodeFailed
 			return result
 		}

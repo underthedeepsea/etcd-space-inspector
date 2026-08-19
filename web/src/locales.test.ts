@@ -99,6 +99,12 @@ for (const key of ['evidence.matchedEvents', 'evidence.windowSeconds'] as const)
   }
 }
 
+for (const key of ['decode.oversized', 'decode.field_limit_exceeded'] as const) {
+  for (const locale of ['zh', 'en'] as const) {
+    assert.ok(text(locale, key).length > 0);
+  }
+}
+
 const auditKeys: TextKey[] = [
   'form.audit', 'form.auditHint', 'type.audit', 'audit.title', 'audit.inputSummary',
   'audit.validEvents', 'audit.writeEvents', 'audit.deduplicatedEvents', 'audit.username',

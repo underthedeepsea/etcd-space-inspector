@@ -172,6 +172,10 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if *dataDirOverride != "" {
 		settings.Server.DataDir = *dataDirOverride
 	}
+	if err := settings.Validate(); err != nil {
+		fmt.Fprintf(stderr, "invalid configuration: %v\n", err)
+		return 1
+	}
 	if !loopbackAddress(settings.Server.Listen) {
 		fmt.Fprintf(stderr, "warning: listening on non-loopback address %s\n", settings.Server.Listen)
 	}
@@ -196,7 +200,7 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	manager, err := worker.NewManager(worker.ManagerConfig{
 		Executable: executablePath(), DataDir: settings.Server.DataDir, OwnerID: ownerID,
 		HeartbeatEvery: 2 * time.Second, StaleAfter: 15 * time.Second, ShutdownTimeout: 10 * time.Second,
-		MaxImports: 1, MaxAnalyses: 1, ServerLog: serverLog,
+		MaxImports: 1, MaxAnalyses: settings.Analysis.MaxConcurrent, ServerLog: serverLog,
 	}, manifests)
 	if err != nil {
 		_ = serverLease.Release()
@@ -414,7 +418,7 @@ func runManagedAnalyze(args []string, stdout, stderr io.Writer) int {
 	manager, err := worker.NewManager(worker.ManagerConfig{
 		Executable: executablePath(), DataDir: *output, OwnerID: fmt.Sprintf("cli-%d", os.Getpid()),
 		HeartbeatEvery: 2 * time.Second, StaleAfter: 15 * time.Second, ShutdownTimeout: 10 * time.Second,
-		MaxImports: 1, MaxAnalyses: 1, ServerLog: serverLog,
+		MaxImports: 1, MaxAnalyses: settings.Analysis.MaxConcurrent, ServerLog: serverLog,
 	}, task.NewService(*output))
 	if err != nil {
 		fmt.Fprintf(stderr, "create worker manager: %v\n", err)
