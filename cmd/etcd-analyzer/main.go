@@ -34,6 +34,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "worker":
+		return runWorker(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, version.Value)
 		return 0

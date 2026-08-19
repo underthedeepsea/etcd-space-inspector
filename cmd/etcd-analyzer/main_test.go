@@ -13,6 +13,7 @@ import (
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
+	"etcd-analyzer/internal/worker"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -23,6 +24,45 @@ func TestRunVersion(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout.String()) != "dev" {
 		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
+func TestRunWorkerPanicWritesResultAndReturns(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "tasks", "task-id")
+	if err := os.MkdirAll(taskDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request := worker.Request{TaskID: "task-id", RunID: "0123456789abcdef", Mode: worker.ModeAnalysis}
+	if err := worker.WriteRequest(taskDir, request); err != nil {
+		t.Fatal(err)
+	}
+	previousOperation := workerRunOperation
+	previousStdin := workerStdin
+	defer func() {
+		workerRunOperation = previousOperation
+		workerStdin = previousStdin
+	}()
+	workerStdin = strings.NewReader("")
+	workerRunOperation = func(context.Context, worker.Request) error {
+		panic("injected worker panic")
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWorker([]string{
+		"--mode", "analysis", "--data-dir", root, "--task", "task-id", "--run", request.RunID,
+	}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	result, err := worker.ReadResult(taskDir, request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorCode != "WORKER_PANIC" || result.ExitCode != 1 {
+		t.Fatalf("result=%+v", result)
+	}
+	if !strings.Contains(stderr.String(), "panic") || !strings.Contains(stderr.String(), "goroutine") {
+		t.Fatalf("stderr=%q", stderr.String())
 	}
 }
 
