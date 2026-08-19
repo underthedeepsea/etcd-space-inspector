@@ -206,6 +206,30 @@ func (s *Service) TaskDir(id string) string {
 	return filepath.Join(s.tasksDir(), id)
 }
 
+// ResolveTaskRelative resolves a slash-separated path within one task directory.
+func (s *Service) ResolveTaskRelative(id, relative string) (string, error) {
+	if err := validID(id); err != nil {
+		return "", err
+	}
+	if relative == "" || strings.Contains(relative, `\`) {
+		return "", fmt.Errorf("invalid task-relative path")
+	}
+	clean := filepath.FromSlash(relative)
+	if filepath.IsAbs(clean) {
+		return "", fmt.Errorf("task-relative path must not be absolute")
+	}
+	root := s.TaskDir(id)
+	target := filepath.Join(root, clean)
+	within, err := filepath.Rel(root, target)
+	if err != nil {
+		return "", fmt.Errorf("resolve task-relative path: %w", err)
+	}
+	if within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("task-relative path escapes task directory")
+	}
+	return target, nil
+}
+
 func (s *Service) tasksDir() string {
 	return filepath.Join(s.dataDir, "tasks")
 }

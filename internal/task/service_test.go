@@ -71,6 +71,23 @@ func TestDeleteRejectsPathOutsideTaskRoot(t *testing.T) {
 	}
 }
 
+func TestResolveTaskRelativeRejectsEscapes(t *testing.T) {
+	svc := NewService(t.TempDir())
+	for _, relative := range []string{"../escape", filepath.Join(string(filepath.Separator), "absolute"), `..\escape`} {
+		if _, err := svc.ResolveTaskRelative("task-id", relative); err == nil {
+			t.Fatalf("relative path %q escaped containment", relative)
+		}
+	}
+	want := filepath.Join(svc.TaskDir("task-id"), "logs", "run.log")
+	got, err := svc.ResolveTaskRelative("task-id", "logs/run.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("resolved path=%q, want %q", got, want)
+	}
+}
+
 func TestServiceRecordsDBVersionEvidence(t *testing.T) {
 	root := t.TempDir()
 	source := clusterVersionSource(t, root, "3.4.13")
