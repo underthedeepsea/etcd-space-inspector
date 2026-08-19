@@ -69,20 +69,21 @@ func TestM12WorkerFailureLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			t.Cleanup(func() { _ = serverLog.Close() })
 			manager, err := worker.NewManager(worker.ManagerConfig{
 				Executable: os.Args[0], DataDir: dataDir, OwnerID: "m12-parent",
 				HeartbeatEvery: 10 * time.Millisecond, StaleAfter: time.Minute,
 				ShutdownTimeout: 100 * time.Millisecond, MaxImports: 1, MaxAnalyses: 1, ServerLog: serverLog,
 			}, manifests)
 			if err != nil {
-				serverLog.Close()
 				t.Fatal(err)
 			}
+			t.Cleanup(func() { _ = manager.Shutdown(context.Background()) })
 			if _, err := manager.Start(context.Background(), worker.Request{TaskID: item.ID, Mode: worker.ModeAnalysis}); err != nil {
-				serverLog.Close()
 				t.Fatal(err)
 			}
 			if test.cancel {
+				waitM12WorkerLog(t, manifests, item.ID)
 				if err := manager.Cancel(item.ID); err != nil {
 					t.Fatal(err)
 				}
@@ -146,9 +147,6 @@ func TestM12WorkerFailureLifecycle(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(manifests.TaskDir(item.ID), worker.RequestFileName)); !os.IsNotExist(err) {
 				t.Fatalf("worker request remains: %v", err)
-			}
-			if err := serverLog.Close(); err != nil {
-				t.Fatal(err)
 			}
 			if err := manifests.Delete(item.ID); err != nil {
 				t.Fatalf("delete after worker cleanup: %v", err)
@@ -237,6 +235,23 @@ func waitM12Terminal(t *testing.T, manifests *task.Service, id string) task.Task
 	item, err := manifests.Get(id)
 	t.Fatalf("task did not reach terminal state: item=%+v err=%v", item, err)
 	return task.Task{}
+}
+
+func waitM12WorkerLog(t *testing.T, manifests *task.Service, id string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		item, err := manifests.Get(id)
+		if err == nil && item.LogFile != "" {
+			path := filepath.Join(manifests.TaskDir(id), filepath.FromSlash(item.LogFile))
+			data, readErr := os.ReadFile(path)
+			if readErr == nil && strings.Contains(string(data), "m12 helper stderr") {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("worker did not write startup log")
 }
 
 func runM12WorkerHelper() {

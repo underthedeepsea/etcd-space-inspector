@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -169,6 +170,12 @@ func writeLeaseFileAtomic(path string, record LeaseRecord) error {
 	if err != nil {
 		return fmt.Errorf("encode lease: %w", err)
 	}
+	if runtime.GOOS == "windows" {
+		if err := writeFileInPlace(path, append(data, '\n')); err != nil {
+			return fmt.Errorf("write lease: %w", err)
+		}
+		return nil
+	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-")
 	if err != nil {
 		return fmt.Errorf("create lease temporary file: %w", err)
@@ -193,15 +200,31 @@ func writeLeaseFileAtomic(path string, record LeaseRecord) error {
 }
 
 func readLeaseFile(path string) (LeaseRecord, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return LeaseRecord{}, err
+	attempts := 1
+	if runtime.GOOS == "windows" {
+		attempts = 50
 	}
-	var record LeaseRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return LeaseRecord{}, err
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) || attempt == attempts-1 {
+				return LeaseRecord{}, err
+			}
+			lastErr = err
+		} else {
+			var record LeaseRecord
+			if err := json.Unmarshal(data, &record); err == nil {
+				return record, nil
+			} else {
+				lastErr = err
+			}
+		}
+		if attempt+1 < attempts {
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
-	return record, nil
+	return LeaseRecord{}, lastErr
 }
 
 func sameLeaseOwner(left, right LeaseRecord) bool {

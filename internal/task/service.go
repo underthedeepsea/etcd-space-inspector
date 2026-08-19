@@ -209,15 +209,21 @@ func (s *Service) Get(id string) (Task, error) {
 	if err := validID(id); err != nil {
 		return Task{}, err
 	}
-	data, err := readManifest(filepath.Join(s.TaskDir(id), "manifest.json"))
-	if err != nil {
-		return Task{}, fmt.Errorf("read task manifest: %w", err)
+	path := filepath.Join(s.TaskDir(id), "manifest.json")
+	for attempt := 0; attempt < 5; attempt++ {
+		data, err := readManifest(path)
+		if err != nil {
+			return Task{}, fmt.Errorf("read task manifest: %w", err)
+		}
+		var result Task
+		if err := json.Unmarshal(data, &result); err == nil {
+			return result, nil
+		} else if attempt == 4 {
+			return Task{}, fmt.Errorf("decode task manifest: %w", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	var result Task
-	if err := json.Unmarshal(data, &result); err != nil {
-		return Task{}, fmt.Errorf("decode task manifest: %w", err)
-	}
-	return result, nil
+	panic("unreachable")
 }
 
 func readManifest(path string) ([]byte, error) {
@@ -366,6 +372,12 @@ func (s *Service) writeManifest(item Task) error {
 		return fmt.Errorf("encode task manifest: %w", err)
 	}
 	path := filepath.Join(s.TaskDir(item.ID), "manifest.json")
+	if runtime.GOOS == "windows" {
+		if err := writeFileInPlace(path, append(data, '\n')); err != nil {
+			return fmt.Errorf("write task manifest: %w", err)
+		}
+		return nil
+	}
 	prefix := "manifest-run-"
 	if item.RunID != "" {
 		prefix += safeTempPart(item.RunID) + "-"
@@ -402,6 +414,35 @@ func replaceManifest(temporary, path string) error {
 	for attempt := 0; attempt < attempts; attempt++ {
 		if err = os.Rename(temporary, path); err == nil {
 			return nil
+		}
+		if attempt+1 < attempts {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	return err
+}
+
+func writeFileInPlace(path string, data []byte) error {
+	attempts := 1
+	if runtime.GOOS == "windows" {
+		attempts = 50
+	}
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		file, openErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if openErr == nil {
+			if _, err = file.Write(data); err == nil {
+				err = file.Sync()
+			}
+			closeErr := file.Close()
+			if err == nil {
+				err = closeErr
+			}
+			if err == nil {
+				return nil
+			}
+		} else {
+			err = openErr
 		}
 		if attempt+1 < attempts {
 			time.Sleep(10 * time.Millisecond)
