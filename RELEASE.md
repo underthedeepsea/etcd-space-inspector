@@ -4,7 +4,7 @@
 
 | 版本与标签 | 发布分支 | 里程碑 | 主要能力 |
 | --- | --- | --- | --- |
-| `0.12.0` / `v0.12.0`（待发布） | `release/0.12.0` | M12 大 Snapshot 可靠分析 | Snapshot/raw-db 导入与分析的隔离 Worker、持久化服务/run 日志、lease 与恢复、字节/MVCC/Kubernetes 子阶段进度、资源边界、SQLite batch statement 复用和 Kubernetes 字段差异流式聚合；差分任务仍由父进程管理。 |
+| `0.12.0` / `v0.12.0`（GitHub 发布流程中） | `release/0.12.0` | M12 大 Snapshot 可靠分析 | Snapshot/raw-db 导入与分析的隔离 Worker、持久化服务/run 日志、lease 与恢复、字节/MVCC/Kubernetes 子阶段进度、资源边界、SQLite batch statement 复用和 Kubernetes 字段差异流式聚合；差分任务仍由父进程管理。 |
 | `0.11.0` / `v0.11.0`（待发布） | `release/0.11.0` | M11 核心指标时间关联 | 本地 Prometheus query_range matrix 导入、七类 etcd 核心指标时间线，以及双 Snapshot 实际采集窗口内的增长起点、Counter 峰值、quota、可能的 defrag 差值和延迟 P99 证据；来源一致性未经验证，时间重合不作为因果证明。 |
 | `0.10.0` / `v0.10.0` | `release/0.10.0` | M10 Audit 写入来源证据 | 独立 Kubernetes Audit JSONL/gzip 任务、对象级 Snapshot 差分，以及 `(baseline,target]` 窗口内按对象、Resource、Namespace 匹配的 high/medium/low 候选写入主体；原始对象、URI、完整 IP/UA 不进入标准化产物，来源一致性始终标为未验证。 |
 | `0.9.0` / `v0.9.0` | `release/0.9.0` | M9 日志窗口关联 | 将一个已完成日志任务与双 Snapshot 的实际采集窗口关联，按事件类型、严重度和来源汇总时间重合证据，并展示来源未验证与日志覆盖状态；不包含 Audit、Prometheus 或责任归因。 |
@@ -61,4 +61,4 @@ fixture 为 20,000 个 Kubernetes revisions、1,000 个逻辑 Key、每个 revis
 
 ### Remaining risk
 
-Worker 隔离解决的是 Snapshot/raw-db 导入和分析的父进程稳定性；Snapshot 差分仍在父进程中执行，差分 panic/长时间运行不会获得 M12 Worker 的同等进程隔离。Windows 原生 1.2 GB 验收需在 Windows runner 上完成后，才具备跨平台发布证据。GitHub push、PR、merge、`v0.12.0` tag 均等待明确授权。
+Worker 隔离解决的是 Snapshot/raw-db 导入和分析的父进程稳定性；Snapshot 差分仍在父进程中执行，差分 panic/长时间运行不会获得 M12 Worker 的同等进程隔离。Windows 原生 1.2 GB 验收需在 Windows runner 上完成后，才具备跨平台发布证据。本次已获授权执行 GitHub push、PR、merge 和 `v0.12.0` tag 流程。
