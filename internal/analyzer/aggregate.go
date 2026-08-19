@@ -8,21 +8,35 @@ import (
 	"strings"
 )
 
+// ProgressFunc receives value-free aggregate stage counters.
+type ProgressFunc func(stage string, processed, total int64)
+
 // Materialize rebuilds current-key, prefix, and task MVCC aggregates.
-func Materialize(ctx context.Context, db *sql.DB, taskID string, batchSize int) error {
+func Materialize(ctx context.Context, db *sql.DB, taskID string, batchSize int, callbacks ...ProgressFunc) error {
 	if batchSize < 1 {
 		batchSize = 1000
 	}
+	progress := firstProgressCallback(callbacks)
 	if _, err := db.ExecContext(ctx, `DELETE FROM key_records WHERE task_id = ?`, taskID); err != nil {
 		return fmt.Errorf("clear key aggregates: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM prefix_stats WHERE task_id = ?`, taskID); err != nil {
 		return fmt.Errorf("clear prefix aggregates: %w", err)
 	}
+	if progress != nil {
+		progress("mvcc-key-aggregate", 0, 0)
+	}
 	if _, err := db.ExecContext(ctx, keyAggregationSQL, taskID); err != nil {
 		return fmt.Errorf("materialize keys: %w", err)
 	}
-	if err := materializePrefixes(ctx, db, taskID, batchSize); err != nil {
+	keyTotal, err := countTaskRows(ctx, db, "key_records", taskID)
+	if err != nil {
+		return fmt.Errorf("count key aggregates: %w", err)
+	}
+	if progress != nil {
+		progress("mvcc-key-aggregate", keyTotal, keyTotal)
+	}
+	if err := materializePrefixes(ctx, db, taskID, batchSize, keyTotal, progress); err != nil {
 		return err
 	}
 	if _, err := db.ExecContext(ctx, summarySQL, taskID, taskID); err != nil {
@@ -89,8 +103,12 @@ type keyAggregate struct {
 	tombstoneBytes     int64
 }
 
-func materializePrefixes(ctx context.Context, db *sql.DB, taskID string, batchSize int) error {
+func materializePrefixes(ctx context.Context, db *sql.DB, taskID string, batchSize int, total int64, progress ProgressFunc) error {
 	lastID := int64(0)
+	processed := int64(0)
+	if progress != nil {
+		progress("mvcc-prefix-aggregate", 0, total)
+	}
 	for {
 		rows, err := db.QueryContext(ctx, `
 SELECT id, key_text, present, current_value_bytes, historical_versions, historical_bytes,
@@ -120,7 +138,26 @@ FROM key_records WHERE task_id = ? AND id > ? ORDER BY id LIMIT ?`, taskID, last
 		if err := writePrefixBatch(ctx, db, taskID, batch); err != nil {
 			return err
 		}
+		processed += int64(len(batch))
+		if progress != nil {
+			progress("mvcc-prefix-aggregate", processed, total)
+		}
 	}
+}
+
+func firstProgressCallback(callbacks []ProgressFunc) ProgressFunc {
+	if len(callbacks) == 0 {
+		return nil
+	}
+	return callbacks[0]
+}
+
+func countTaskRows(ctx context.Context, db *sql.DB, table, taskID string) (int64, error) {
+	var count int64
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE task_id = ?", taskID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func writePrefixBatch(ctx context.Context, db *sql.DB, taskID string, batch []keyAggregate) error {

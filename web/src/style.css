@@ -34,6 +34,7 @@ td small { display: block; margin-top: .25rem; color: #69796f; font-family: ui-m
 .badge.completed { background: #d9f2df; color: #17552c; }.badge.failed { background: #ffe0de; color: #7a211b; }.badge.running { background: #dbeaff; color: #214c7a; }
 .actions { display: flex; gap: .4rem; }.danger { background: white; color: #912f27; border-color: #c88680; }.empty { padding: 2rem; text-align: center; color: #66756c; }
 progress { width: 7rem; accent-color: #276448; }
+.task-progress { display: grid; gap: .2rem; min-width: 13rem; white-space: normal; }.task-progress progress { width: 100%; }.task-progress small { color: #526158; }.progress-text { color: #526158; font-size: .85rem; }.heartbeat-warning { color: #912f27; font-weight: 700; }.task-log-panel { margin-top: 1rem; }.task-log { max-height: 32rem; overflow: auto; margin: 0; padding: 1rem; border-radius: .5rem; background: #17221d; color: #edf4ef; white-space: pre-wrap; overflow-wrap: anywhere; font: .8rem/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .7rem; margin: 1rem 0; }
 .metric { display: grid; gap: .25rem; padding: .8rem; border: 1px solid #dce4de; border-radius: .55rem; }.metric span { color: #66756c; font-size: .8rem; }.metric strong { font-size: 1.2rem; }
 .metric-label { display: inline-flex; align-items: center; gap: .35rem; }
@@ -59,9 +60,15 @@ progress { width: 7rem; accent-color: #276448; }
 .hash { overflow-wrap: anywhere; color: #526158; font-family: ui-monospace, monospace; }
 .evidence-hash { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 .evidence-meta { color: #526158; }
+.curve-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; margin: 1rem 0; }
+.curve-grid figure { margin: 0; padding: .65rem; border: 1px solid #dce4de; border-radius: .55rem; }
+.curve-grid figcaption { font: 700 .75rem ui-monospace, monospace; color: #526158; }
+.metric-curve { display: block; width: 100%; height: 7rem; }
+.metric-curve path { fill: none; stroke: #276448; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 @media (max-width: 900px) { .task-form { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px) { .metrics, .filters { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px) { .log-filters { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px) { .ranking-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .curve-grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 560px) { .header { flex-direction: column; }.task-form, .metrics, .filters { grid-template-columns: 1fr; }.shell { padding-top: 1.5rem; } }

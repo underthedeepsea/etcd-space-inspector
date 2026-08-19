@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -113,5 +114,78 @@ func TestCopyRejectsSymlinkAndOversizeInput(t *testing.T) {
 	}
 	if _, err := os.Stat(destination); !os.IsNotExist(err) {
 		t.Fatalf("partial destination remains: %v", err)
+	}
+}
+
+func TestCopyWithProgressReportsAndAtomicallyReplacesDestination(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.db")
+	contents := make([]byte, 1<<20)
+	for i := range contents {
+		contents[i] = byte(i)
+	}
+	if err := os.WriteFile(source, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(dir, "nested", "input.db")
+	var updates [][2]int64
+	meta, err := CopyWithProgress(context.Background(), source, destination, 2<<20, func(copied, total int64) error {
+		updates = append(updates, [2]int64{copied, total})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Size != int64(len(contents)) || meta.SHA256 == "" || len(updates) == 0 {
+		t.Fatalf("meta=%+v updates=%v", meta, updates)
+	}
+	for i, update := range updates {
+		if update[1] != int64(len(contents)) || update[0] <= 0 || (i > 0 && update[0] < updates[i-1][0]) {
+			t.Fatalf("non-monotonic update %v", updates)
+		}
+	}
+	if _, err := os.Stat(destination + ".partial"); !os.IsNotExist(err) {
+		t.Fatalf("partial destination remains: %v", err)
+	}
+	if data, err := os.ReadFile(destination); err != nil || len(data) != len(contents) {
+		t.Fatalf("destination size=%d err=%v", len(data), err)
+	}
+}
+
+func TestCopyWithProgressRemovesPartialOnCancellation(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.db")
+	if err := os.WriteFile(source, make([]byte, 512*1024), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(dir, "input.db")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := CopyWithProgress(ctx, source, destination, 1<<20, func(copied, total int64) error {
+		if copied > 0 {
+			cancel()
+		}
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+	if _, err := os.Stat(destination + ".partial"); !os.IsNotExist(err) {
+		t.Fatalf("partial destination remains: %v", err)
+	}
+}
+
+func TestCopyWithProgressRejectsCallbackError(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.db")
+	if err := os.WriteFile(source, []byte("input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(dir, "input.db")
+	_, err := CopyWithProgress(context.Background(), source, destination, 1024, func(int64, int64) error {
+		return fmt.Errorf("stop")
+	})
+	if err == nil || err.Error() != "copy progress: stop" {
+		t.Fatalf("err=%v", err)
 	}
 }

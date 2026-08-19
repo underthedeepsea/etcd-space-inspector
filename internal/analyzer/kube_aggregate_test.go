@@ -3,12 +3,25 @@ package analyzer
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"etcd-analyzer/internal/kube"
 	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/storage"
 )
+
+func TestKubernetesDiffSourceIsOneOrderedJoin(t *testing.T) {
+	for _, fragment := range []string{
+		"FROM kube_revision_records revisions",
+		"LEFT JOIN kube_field_records fields",
+		"ORDER BY revisions.key_hash, revisions.main_revision, revisions.sub_revision, fields.path",
+	} {
+		if !strings.Contains(kubeDiffSourceSQL, fragment) {
+			t.Fatalf("diff source missing %q: %s", fragment, kubeDiffSourceSQL)
+		}
+	}
+}
 
 func TestMaterializeKubernetesBuildsObjectsDiffsAndTotals(t *testing.T) {
 	db, err := storage.Open(filepath.Join(t.TempDir(), "task.db"))
@@ -109,6 +122,35 @@ func TestMaterializeKubernetesRebuildsTaskRows(t *testing.T) {
 		if count != want {
 			t.Fatalf("%s count=%d want=%d", table, count, want)
 		}
+	}
+}
+
+func TestMaterializeKubernetesReportsObjectAndDiffProgress(t *testing.T) {
+	db, err := storage.Open(filepath.Join(t.TempDir(), "task.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := storage.NewMVCCRepository(db, "t1").StoreRecords(context.Background(), kubernetesAggregateFixture()); err != nil {
+		t.Fatal(err)
+	}
+	var stages []string
+	if err := MaterializeKubernetes(context.Background(), db, "t1", 2, func(stage string, processed, total int64) {
+		stages = append(stages, stage)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	objectIndex, diffIndex := -1, -1
+	for index, stage := range stages {
+		if stage == "kubernetes-object-aggregate" && objectIndex < 0 {
+			objectIndex = index
+		}
+		if stage == "kubernetes-diff-aggregate" && diffIndex < 0 {
+			diffIndex = index
+		}
+	}
+	if objectIndex < 0 || diffIndex < 0 || objectIndex >= diffIndex {
+		t.Fatalf("stages=%v", stages)
 	}
 }
 

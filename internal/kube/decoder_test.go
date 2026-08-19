@@ -54,6 +54,32 @@ func TestAnalyzerMarksPartialRegistryPathUnknown(t *testing.T) {
 	}
 }
 
+func TestAnalyzerMarksOversizedRegistryValue(t *testing.T) {
+	value := make([]byte, (32<<20)+1)
+	result := NewAnalyzer().Analyze([]byte("/registry/pods/default/p"), "hash", value)
+	if result == nil || result.DecodeStatus != StatusOversized || result.ValueBytes != int64(len(value)) || len(result.Fields) != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestAnalyzerMapsFieldLimitsWithoutReturningFields(t *testing.T) {
+	object := map[string]any{}
+	current := object
+	for index := 0; index < 129; index++ {
+		next := map[string]any{}
+		current["nested"] = next
+		current = next
+	}
+	value, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := NewAnalyzer().Analyze([]byte("/registry/pods/default/p"), "hash", value)
+	if result == nil || result.DecodeStatus != StatusFieldLimitExceeded || len(result.Fields) != 0 || result.ValueBytes != int64(len(value)) {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestAnalyzerRejectsUnlistedBuiltInProtobuf(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {

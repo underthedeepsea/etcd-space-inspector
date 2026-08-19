@@ -9,6 +9,7 @@ import (
 
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
+	"etcd-analyzer/internal/worker"
 )
 
 func TestApplicationCreatesRunsListsAndDeletesTask(t *testing.T) {
@@ -78,6 +79,34 @@ func TestGetWaitsForTerminalTaskCleanup(t *testing.T) {
 	close(done)
 	if err := <-returned; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTaskLogsUsesCurrentContainedRunLog(t *testing.T) {
+	root := t.TempDir()
+	application := New(filepath.Join(root, "data"), nil)
+	item := createApplicationTask(t, application, "task-log")
+	logPath := filepath.Join(application.manifests.TaskDir(item.ID), "logs", "run.log")
+	if err := os.WriteFile(logPath, []byte("first\nsecond\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	item.LogFile = "logs/run.log"
+	if err := application.manifests.Save(item); err != nil {
+		t.Fatal(err)
+	}
+	result, err := application.TaskLogs(context.Background(), item.ID, 1)
+	if err != nil || result.Path != "logs/run.log" || result.Size != int64(len("first\nsecond\n")) || len(result.Lines) != 1 || result.Lines[0] != "second" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+
+	for _, relative := range []string{"../manifest.json", "logs/../manifest.json", filepath.Join(root, "outside.log"), "logs/missing.log"} {
+		item.LogFile = relative
+		if err := application.manifests.Save(item); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := application.TaskLogs(context.Background(), item.ID, 1); !os.IsNotExist(err) {
+			t.Fatalf("relative=%q err=%v", relative, err)
+		}
 	}
 }
 
@@ -171,3 +200,113 @@ func TestRecoverInterruptedTasks(t *testing.T) {
 		t.Fatalf("recovered=%+v", recovered)
 	}
 }
+
+func TestManagedCreateStartsAsyncImportWithoutReturningExternalPath(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "input.db")
+	if err := os.WriteFile(source, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application := NewM5(filepath.Join(root, "data"), 100, 1, 128)
+	fake := &fakeWorkerManager{}
+	application.workerManager = fake
+	created, err := application.Create(context.Background(), task.CreateRequest{Name: "async", SourcePath: source, InputType: "snapshot", MaxInputBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Status != task.StatusImporting || created.SourcePath != "" {
+		t.Fatalf("created=%+v", created)
+	}
+	if len(fake.starts) != 1 || fake.starts[0].Mode != worker.ModeImport || fake.starts[0].TaskID != created.ID {
+		t.Fatalf("starts=%+v", fake.starts)
+	}
+	if _, err := os.Stat(filepath.Join(application.manifests.TaskDir(created.ID), "task.db")); !os.IsNotExist(err) {
+		t.Fatalf("parent created task database: %v", err)
+	}
+}
+
+func TestManagedStartCancelAndShutdownDelegateToWorkerManager(t *testing.T) {
+	application := NewM5(filepath.Join(t.TempDir(), "data"), 100, 1, 128)
+	item := createApplicationTask(t, application, "managed")
+	fake := &fakeWorkerManager{}
+	application.workerManager = fake
+	if err := application.Start(context.Background(), item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.starts) != 1 || fake.starts[0].Mode != worker.ModeAnalysis {
+		t.Fatalf("starts=%+v", fake.starts)
+	}
+	if err := application.Cancel(item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if fake.cancelled != item.ID {
+		t.Fatalf("cancelled=%q", fake.cancelled)
+	}
+	if err := application.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.shutdown {
+		t.Fatal("worker manager was not shut down")
+	}
+	if _, err := os.Stat(application.databasePath(item.ID)); err != nil {
+		t.Fatalf("expected pre-existing task database from synchronous fixture: %v", err)
+	}
+}
+
+func TestRecoverDamagedTaskDoesNotBlockOtherTasks(t *testing.T) {
+	root := t.TempDir()
+	application := New(filepath.Join(root, "data"), nil)
+	bad := createApplicationTask(t, application, "bad")
+	good := createApplicationTask(t, application, "good")
+	bad.Status = task.StatusCompleted
+	if err := application.manifests.Save(bad); err != nil {
+		t.Fatal(err)
+	}
+	good.Status = task.StatusRunning
+	if err := application.manifests.Save(good); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(application.databasePath(bad.ID), []byte("not sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.RecoverInterrupted(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	badRecovered, err := application.manifests.Get(bad.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goodRecovered, err := application.manifests.Get(good.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if badRecovered.ErrorCode != "RECOVERY_FAILED" || badRecovered.Status != task.StatusFailed {
+		t.Fatalf("bad=%+v", badRecovered)
+	}
+	if goodRecovered.ErrorCode != "TASK_INTERRUPTED" || goodRecovered.Status != task.StatusFailed {
+		t.Fatalf("good=%+v", goodRecovered)
+	}
+}
+
+type fakeWorkerManager struct {
+	starts    []worker.Request
+	cancelled string
+	shutdown  bool
+}
+
+func (f *fakeWorkerManager) Start(_ context.Context, request worker.Request) (task.Task, error) {
+	f.starts = append(f.starts, request)
+	return task.Task{ID: request.TaskID, Status: task.StatusImporting}, nil
+}
+
+func (f *fakeWorkerManager) Cancel(id string) error {
+	f.cancelled = id
+	return nil
+}
+
+func (f *fakeWorkerManager) Shutdown(context.Context) error {
+	f.shutdown = true
+	return nil
+}
+
+func (f *fakeWorkerManager) Running(string) bool { return true }

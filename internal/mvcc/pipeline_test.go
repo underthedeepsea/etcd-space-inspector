@@ -34,6 +34,24 @@ func TestPipelineDecodesBoundedBatchesWithoutPlaintext(t *testing.T) {
 	}
 }
 
+func TestPipelineReportsExactProgressCounters(t *testing.T) {
+	path := createMVCCFixture(t)
+	var updates []mvcc.Progress
+	stats, err := mvcc.NewPipeline(2, 2, 2).RunWithProgress(context.Background(), path, "3.4.13", "manual", &revisionSink{}, func(update mvcc.Progress) {
+		updates = append(updates, update)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) == 0 {
+		t.Fatal("no progress updates")
+	}
+	last := updates[len(updates)-1]
+	if last.Scanned != stats.Scanned || last.Decoded != stats.Decoded || last.Written != stats.Decoded || last.Total != 4 {
+		t.Fatalf("last=%+v stats=%+v", last, stats)
+	}
+}
+
 func TestPipelineRejectsUnconfirmedVersion(t *testing.T) {
 	_, err := mvcc.NewPipeline(1, 1, 1).Run(context.Background(), "unused", "3.5.0", "manual", &revisionSink{})
 	if !errors.Is(err, mvcc.ErrSemanticUnavailable) {

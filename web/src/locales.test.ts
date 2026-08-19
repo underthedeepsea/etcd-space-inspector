@@ -35,6 +35,25 @@ for (const key of churnKeys) {
   }
 }
 
+const taskProgressKeys: TextKey[] = [
+  'tasks.viewLog', 'taskLogs.title', 'taskLogs.loading', 'taskLogs.loadFailed', 'taskLogs.empty',
+  'taskLogs.pathUnavailable', 'taskLogs.meta', 'status.importing', 'progress.unknown',
+  'progress.unavailable', 'progress.items', 'progress.perSecondSuffix', 'progress.processed',
+  'progress.rate', 'progress.elapsed', 'progress.eta', 'progress.heartbeat',
+  'progress.heartbeatWarning', 'progress.exitCode', 'progress.aria', 'stage.none',
+  'stage.unknown', 'stage.worker-starting', 'stage.import-copy', 'stage.bbolt-physical',
+  'stage.physical-open', 'stage.physical-integrity-check', 'stage.physical-page-scan',
+  'stage.mvcc-semantic', 'stage.mvcc-scan', 'stage.mvcc-write', 'stage.mvcc-key-aggregate',
+  'stage.mvcc-prefix-aggregate', 'stage.mvcc-summary', 'stage.kubernetes-object-aggregate',
+  'stage.kubernetes-diff-aggregate', 'stage.kubernetes-resource-aggregate',
+  'stage.kubernetes-namespace-aggregate', 'stage.kubernetes-summary-aggregate',
+  'stage.report-generate', 'stage.log-parse', 'stage.audit-parse', 'stage.metrics-parse',
+  'stage.completed', 'stage.failed', 'stage.cancelled',
+];
+for (const key of taskProgressKeys) {
+  for (const locale of ['zh', 'en'] as const) assert.ok(text(locale, key).length > 0);
+}
+
 const logKeys: TextKey[] = [
   'form.log',
   'form.logHint',
@@ -99,6 +118,12 @@ for (const key of ['evidence.matchedEvents', 'evidence.windowSeconds'] as const)
   }
 }
 
+for (const key of ['decode.oversized', 'decode.field_limit_exceeded'] as const) {
+  for (const locale of ['zh', 'en'] as const) {
+    assert.ok(text(locale, key).length > 0);
+  }
+}
+
 const auditKeys: TextKey[] = [
   'form.audit', 'form.auditHint', 'type.audit', 'audit.title', 'audit.inputSummary',
   'audit.validEvents', 'audit.writeEvents', 'audit.deduplicatedEvents', 'audit.username',
@@ -114,6 +139,26 @@ const auditKeys: TextKey[] = [
 ];
 for (const key of auditKeys) {
   for (const locale of ['zh', 'en'] as const) assert.ok(text(locale, key).length > 0);
+}
+
+const metricsKeys: TextKey[] = [
+  'form.metrics', 'form.metricsHint', 'type.metrics', 'metrics.title', 'metrics.loadFailed',
+  'metrics.allTypes', 'metrics.instance', 'metrics.series', 'metrics.samples', 'metrics.empty',
+  'metricsEvidence.title', 'metricsEvidence.select', 'metricsEvidence.none', 'metricsEvidence.loadFailed',
+  'metricsEvidence.growthStart', 'metricsEvidence.growthInterval', 'metricsEvidence.coverage',
+  'metricsEvidence.sourceUnverified', 'metricsEvidence.causality', 'metricsEvidence.counterGap',
+  'metricsEvidence.reclaimableCaveat', 'metricsEvidence.aligned', 'metricsEvidence.notAligned',
+];
+for (const key of metricsKeys) {
+  for (const locale of ['zh', 'en'] as const) assert.ok(text(locale, key).length > 0);
+}
+
+for (const key of ['metrics.supportedSeries', 'metrics.validSamples', 'metrics.instances', 'metrics.dbDelta', 'metrics.inUseDelta', 'metrics.reclaimable', 'metrics.quotaRatio', 'metrics.putRate', 'metrics.deleteRate', 'metrics.backendP99', 'metrics.walP99'] as const) {
+  for (const locale of ['zh', 'en'] as const) {
+    const copy = metric(locale, key);
+    assert.ok(copy.label.length > 0);
+    assert.ok(copy.help.length > 0);
+  }
 }
 
 for (const key of ['audit.totalLines', 'audit.validEvents', 'audit.writeEvents', 'audit.unknownLines', 'audit.parseErrors', 'audit.candidates', 'audit.exactMatches', 'audit.payloadBytes'] as const) {

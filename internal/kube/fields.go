@@ -1,6 +1,7 @@
 package kube
 
 import (
+	"container/heap"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,7 +11,11 @@ import (
 	"strings"
 )
 
-const additionalFieldLimit = 20
+const (
+	additionalFieldLimit = 20
+	maxJSONDepth         = 128
+	maxFieldNodes        = 50000
+)
 
 var selectedPaths = []string{
 	"metadata.managedFields",
@@ -38,6 +43,9 @@ var opaquePaths = map[string]bool{
 
 // AnalyzeFields returns deterministic structural summaries without field content.
 func AnalyzeFields(object map[string]any) ([]FieldStat, error) {
+	if err := validateStructure(object); err != nil {
+		return nil, err
+	}
 	result := make([]FieldStat, 0, len(selectedPaths)+additionalFieldLimit)
 	selected := make(map[string]bool, len(selectedPaths))
 	for _, path := range selectedPaths {
@@ -50,30 +58,32 @@ func AnalyzeFields(object map[string]any) ([]FieldStat, error) {
 			result = append(result, field)
 		}
 	}
-	candidates := []FieldStat{}
-	if err := collectFields(object, "", selected, &candidates); err != nil {
+	candidates := &fieldCandidateHeap{}
+	heap.Init(candidates)
+	if err := collectFields(object, "", selected, candidates); err != nil {
 		return nil, err
 	}
-	sort.Slice(candidates, func(left, right int) bool {
-		if candidates[left].ByteSize == candidates[right].ByteSize {
-			return candidates[left].Path < candidates[right].Path
+	candidateValues := append([]FieldStat(nil), (*candidates)...)
+	sort.Slice(candidateValues, func(left, right int) bool {
+		if candidateValues[left].ByteSize == candidateValues[right].ByteSize {
+			return candidateValues[left].Path < candidateValues[right].Path
 		}
-		return candidates[left].ByteSize > candidates[right].ByteSize
+		return candidateValues[left].ByteSize > candidateValues[right].ByteSize
 	})
-	if len(candidates) > additionalFieldLimit {
-		candidates = candidates[:additionalFieldLimit]
-	}
-	result = append(result, candidates...)
+	result = append(result, candidateValues...)
 	return result, nil
 }
 
-func collectFields(value any, path string, selected map[string]bool, result *[]FieldStat) error {
+func collectFields(value any, path string, selected map[string]bool, result *fieldCandidateHeap) error {
 	if path != "" && path != "metadata" && !selected[path] {
 		field, err := summarizeField(path, value)
 		if err != nil {
 			return err
 		}
-		*result = append(*result, field)
+		heap.Push(result, field)
+		if result.Len() > additionalFieldLimit {
+			heap.Pop(result)
+		}
 	}
 	if opaquePaths[path] {
 		return nil
@@ -97,6 +107,58 @@ func collectFields(value any, path string, selected map[string]bool, result *[]F
 		}
 	}
 	return nil
+}
+
+type fieldCandidateHeap []FieldStat
+
+func (h fieldCandidateHeap) Len() int { return len(h) }
+
+// Less puts the least useful candidate at the root: smaller fields first, and
+// for equal sizes lexicographically larger paths first.
+func (h fieldCandidateHeap) Less(left, right int) bool {
+	if h[left].ByteSize == h[right].ByteSize {
+		return h[left].Path > h[right].Path
+	}
+	return h[left].ByteSize < h[right].ByteSize
+}
+
+func (h fieldCandidateHeap) Swap(left, right int) { h[left], h[right] = h[right], h[left] }
+
+func (h *fieldCandidateHeap) Push(value any) { *h = append(*h, value.(FieldStat)) }
+
+func (h *fieldCandidateHeap) Pop() any {
+	old := *h
+	last := len(old) - 1
+	value := old[last]
+	*h = old[:last]
+	return value
+}
+
+func validateStructure(value any) error {
+	nodes := 0
+	var walk func(any, int) error
+	walk = func(current any, depth int) error {
+		nodes++
+		if nodes > maxFieldNodes || depth > maxJSONDepth {
+			return ErrFieldLimitExceeded
+		}
+		switch typed := current.(type) {
+		case map[string]any:
+			for _, child := range typed {
+				if err := walk(child, depth+1); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, child := range typed {
+				if err := walk(child, depth+1); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(value, 0)
 }
 
 func summarizeField(path string, value any) (FieldStat, error) {

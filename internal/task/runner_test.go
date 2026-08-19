@@ -42,6 +42,31 @@ func TestRunnerCompletesEmptyPipeline(t *testing.T) {
 	}
 }
 
+func TestRunnerAcceptsPreclaimedRunningTask(t *testing.T) {
+	repo := newFakeRunnerRepository(Task{ID: "t1", Status: StatusRunning, CreatedAt: time.Now().UTC()})
+	if err := NewRunner(repo, nil).Start(context.Background(), "t1"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := repo.GetTask(context.Background(), "t1")
+	if got.Status != StatusCompleted || got.CompletedAt == nil {
+		t.Fatalf("task=%+v", got)
+	}
+}
+
+func TestRunnerPersistsStageProgressReports(t *testing.T) {
+	repo := newFakeRunnerRepository(Task{ID: "t1", Status: StatusPending, CreatedAt: time.Now().UTC()})
+	runner := NewRunner(repo, []Stage{{Name: "scan", Run: func(ctx context.Context, tc *Context) error {
+		return tc.Report(ctx, ProgressUpdate{Stage: "scan", StageProgress: 0.5, Processed: 5, Total: 10, Unit: "rows"})
+	}}})
+	if err := runner.Start(context.Background(), "t1"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := repo.GetTask(context.Background(), "t1")
+	if got.Status != StatusCompleted || got.CurrentStage != "completed" || got.Processed != 5 || got.Total != 10 || got.Unit != "rows" {
+		t.Fatalf("task=%+v", got)
+	}
+}
+
 type fakeRunnerRepository struct {
 	mu   sync.Mutex
 	task Task

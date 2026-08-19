@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"etcd-analyzer/internal/auditanalysis"
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/loganalysis"
+	"etcd-analyzer/internal/metricsanalysis"
 	"etcd-analyzer/internal/storage"
 )
 
@@ -201,6 +203,10 @@ type fakeDiffService struct {
 	auditEvidenceDiffID string
 	auditEvidenceTaskID string
 	auditEvidenceQuery  storage.AuditQuery
+	metricsEvidence     metricsanalysis.DiffEvidence
+	metricsEvidenceErr  error
+	metricsEvidenceDiff string
+	metricsEvidenceTask string
 	cancelled           bool
 	deleted             bool
 }
@@ -250,6 +256,44 @@ func (f *fakeDiffService) DiffLogEvidence(_ context.Context, diffID, taskID stri
 func (f *fakeDiffService) DiffAuditEvidence(_ context.Context, diffID, taskID string, query storage.AuditQuery) (auditanalysis.Evidence, error) {
 	f.auditEvidenceDiffID, f.auditEvidenceTaskID, f.auditEvidenceQuery = diffID, taskID, query
 	return f.auditEvidence, f.auditEvidenceErr
+}
+
+func (f *fakeDiffService) MetricsEvidence(_ context.Context, diffID, taskID string) (metricsanalysis.DiffEvidence, error) {
+	f.metricsEvidenceDiff, f.metricsEvidenceTask = diffID, taskID
+	return f.metricsEvidence, f.metricsEvidenceErr
+}
+
+func TestMetricsEvidenceRouteAndValidation(t *testing.T) {
+	service := &fakeDiffService{metricsEvidence: metricsanalysis.DiffEvidence{Evidence: metricsanalysis.Evidence{SourceCompatibility: "unverified", EvidenceOnly: true}}}
+	handler := New(Dependencies{Diffs: service})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/diffs/d1/metrics-evidence?metricsTaskId=metrics-1", nil))
+	if recorder.Code != http.StatusOK || service.metricsEvidenceDiff != "d1" || service.metricsEvidenceTask != "metrics-1" || !strings.Contains(recorder.Body.String(), `"sourceCompatibility":"unverified"`) || !strings.Contains(recorder.Body.String(), `"evidenceOnly":true`) || !strings.Contains(recorder.Body.String(), `"causalityEstablished":false`) || !strings.Contains(recorder.Body.String(), `"curves":[]`) {
+		t.Fatalf("status=%d body=%s service=%+v", recorder.Code, recorder.Body.String(), service)
+	}
+	for _, path := range []string{
+		"/api/v1/diffs/d1/metrics-evidence",
+		"/api/v1/diffs/d1/metrics-evidence?metricsTaskId=a&metricsTaskId=b",
+		"/api/v1/diffs/d1/metrics-evidence?metricsTaskId=a%2Fb",
+		"/api/v1/diffs/d1/metrics-evidence?metricsTaskId=good&extra=bad",
+	} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("path=%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestMetricsEvidenceRouteMapsStableErrors(t *testing.T) {
+	for _, code := range []string{"METRICS_TASK_REQUIRED", "METRICS_TASK_INVALID", "METRICS_TASK_NOT_COMPLETED", "METRICS_DIFF_NOT_COMPLETED", "METRICS_WINDOW_UNAVAILABLE"} {
+		recorder := httptest.NewRecorder()
+		service := &fakeDiffService{metricsEvidenceErr: apperr.E(code, "safe error", errors.New("Bearer private-cause"))}
+		New(Dependencies{Diffs: service}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/diffs/d1/metrics-evidence?metricsTaskId=metrics-1", nil))
+		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), code) || strings.Contains(recorder.Body.String(), "private-cause") {
+			t.Fatalf("code=%s status=%d body=%s", code, recorder.Code, recorder.Body.String())
+		}
+	}
 }
 
 func TestDiffAuditEvidenceRouteAndValidation(t *testing.T) {

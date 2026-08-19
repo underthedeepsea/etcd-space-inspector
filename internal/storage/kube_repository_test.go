@@ -124,3 +124,30 @@ func TestKubeRepositoryQueriesValueFreeObjects(t *testing.T) {
 		t.Fatal("decode status query did not use idx_kube_object_status")
 	}
 }
+
+func TestKubeFieldLargestIndexUsesRevisionAndSize(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "task.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`EXPLAIN QUERY PLAN SELECT path FROM kube_field_records WHERE kube_revision_id = 1 ORDER BY byte_size DESC, path LIMIT 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(detail, "idx_kube_field_largest") {
+			return
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Fatal("largest-field query did not use idx_kube_field_largest")
+}

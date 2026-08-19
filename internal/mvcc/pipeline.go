@@ -27,9 +27,26 @@ type RevisionSink interface {
 type PipelineStats struct {
 	Scanned      int64
 	Decoded      int64
+	Written      int64
+	Total        int64
 	DecodeErrors int64
 	Tombstones   int64
 }
+
+// Progress contains bounded, value-free counters for one pipeline run.
+type Progress struct {
+	Stage        string
+	Scanned      int64
+	Decoded      int64
+	Written      int64
+	DecodeErrors int64
+	Tombstones   int64
+	Total        int64
+}
+
+// ProgressFunc receives progress after each committed sink batch and at the
+// end of the scan.
+type ProgressFunc func(Progress)
 
 // Pipeline is a bounded etcd 3.4 revision decoder.
 type Pipeline struct {
@@ -54,6 +71,12 @@ func NewPipeline(workers, channelSize, batchSize int) *Pipeline {
 
 // Run scans one read-only backend and blocks until no raw Value slice remains in flight.
 func (p *Pipeline) Run(ctx context.Context, sourcePath, version, versionSource string, sink RevisionSink) (PipelineStats, error) {
+	return p.RunWithProgress(ctx, sourcePath, version, versionSource, sink, nil)
+}
+
+// RunWithProgress scans one read-only backend and reports exact bounded
+// counters without retaining decoded records.
+func (p *Pipeline) RunWithProgress(ctx context.Context, sourcePath, version, versionSource string, sink RevisionSink, progress ProgressFunc) (PipelineStats, error) {
 	adapter := etcd34.Adapter{}
 	if !adapter.Supports(version, versionSource) {
 		return PipelineStats{}, ErrSemanticUnavailable
@@ -67,11 +90,25 @@ func (p *Pipeline) Run(ctx context.Context, sourcePath, version, versionSource s
 	}
 	defer db.Close()
 
-	var scanned, decoded, decodeErrors, tombstones int64
+	var scanned, decoded, written, decodeErrors, tombstones, total int64
 	err = db.View(func(tx *bolt.Tx) error {
 		if !adapter.Detect(tx) {
 			return fmt.Errorf("%w: key bucket missing", ErrSemanticUnavailable)
 		}
+		if bucket := tx.Bucket([]byte("key")); bucket != nil {
+			total = int64(bucket.Stats().KeyN)
+		}
+		emit := func(stage string) {
+			if progress == nil {
+				return
+			}
+			progress(Progress{
+				Stage: stage, Scanned: atomic.LoadInt64(&scanned), Decoded: atomic.LoadInt64(&decoded),
+				Written: atomic.LoadInt64(&written), DecodeErrors: atomic.LoadInt64(&decodeErrors),
+				Tombstones: atomic.LoadInt64(&tombstones), Total: total,
+			})
+		}
+		emit("mvcc-scan")
 		rawChannel := make(chan rawRecord, p.channelSize)
 		decodedChannel := make(chan Record, p.channelSize)
 		semanticAnalyzer := kube.NewAnalyzer()
@@ -124,22 +161,40 @@ func (p *Pipeline) Run(ctx context.Context, sourcePath, version, versionSource s
 			for record := range decodedChannel {
 				batch = append(batch, record)
 				if len(batch) == cap(batch) {
+					emit("mvcc-scan")
 					if err := sink.StoreRecords(groupContext, batch); err != nil {
 						return err
 					}
+					atomic.AddInt64(&written, int64(len(batch)))
+					emit("mvcc-write")
 					batch = make([]Record, 0, p.batchSize)
 				}
 			}
 			if len(batch) > 0 {
-				return sink.StoreRecords(groupContext, batch)
+				emit("mvcc-scan")
+				if err := sink.StoreRecords(groupContext, batch); err != nil {
+					return err
+				}
+				atomic.AddInt64(&written, int64(len(batch)))
+				emit("mvcc-write")
 			}
 			return nil
 		})
 		return group.Wait()
 	})
 	stats := PipelineStats{
-		Scanned: atomic.LoadInt64(&scanned), Decoded: atomic.LoadInt64(&decoded),
+		Scanned: atomic.LoadInt64(&scanned), Decoded: atomic.LoadInt64(&decoded), Written: atomic.LoadInt64(&written), Total: total,
 		DecodeErrors: atomic.LoadInt64(&decodeErrors), Tombstones: atomic.LoadInt64(&tombstones),
+	}
+	if progress != nil {
+		stage := "mvcc-scan"
+		if stats.Written > 0 {
+			stage = "mvcc-write"
+		}
+		progress(Progress{
+			Stage: stage, Scanned: stats.Scanned, Decoded: stats.Decoded, Written: stats.Written,
+			DecodeErrors: stats.DecodeErrors, Tombstones: stats.Tombstones, Total: stats.Total,
+		})
 	}
 	if err != nil {
 		return stats, err

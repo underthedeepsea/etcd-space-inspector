@@ -1,7 +1,11 @@
 // Package kube defines Value-free Kubernetes analysis records.
 package kube
 
-import "etcd-analyzer/internal/kube/registry"
+import (
+	"errors"
+
+	"etcd-analyzer/internal/kube/registry"
+)
 
 const (
 	StatusDecodedJSON         = "decoded_json"
@@ -11,7 +15,12 @@ const (
 	StatusDecodeFailed        = "decode_failed"
 	StatusFormatUnknown       = "format_unknown"
 	StatusPathUnknown         = "path_unknown"
+	StatusOversized           = "oversized"
+	StatusFieldLimitExceeded  = "field_limit_exceeded"
 )
+
+// ErrFieldLimitExceeded is a safe sentinel that never includes a raw path or value.
+var ErrFieldLimitExceeded = errors.New("kubernetes field limit exceeded")
 
 // Identity is the safe Kubernetes identity derived from an etcd registry key.
 type Identity = registry.Identity

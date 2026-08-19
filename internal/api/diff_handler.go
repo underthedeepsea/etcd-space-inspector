@@ -10,6 +10,7 @@ import (
 	"etcd-analyzer/internal/auditanalysis"
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/loganalysis"
+	"etcd-analyzer/internal/metricsanalysis"
 	"etcd-analyzer/internal/storage"
 )
 
@@ -151,9 +152,28 @@ func (s *server) handleDiff(writer http.ResponseWriter, request *http.Request, r
 		s.handleDiffLogEvidence(writer, request, id)
 	case "audit-evidence":
 		s.handleDiffAuditEvidence(writer, request, id)
+	case "metrics-evidence":
+		s.handleMetricsEvidence(writer, request, id)
 	default:
 		writeError(writer, http.StatusNotFound, "NOT_FOUND", "comparison resource not found")
 	}
+}
+
+func (s *server) handleMetricsEvidence(writer http.ResponseWriter, request *http.Request, diffID string) {
+	values := request.URL.Query()
+	if len(values) != 1 || len(values["metricsTaskId"]) != 1 || !validEvidenceTaskID(values.Get("metricsTaskId")) {
+		writeError(writer, http.StatusBadRequest, "INPUT_INVALID", "invalid metrics evidence query")
+		return
+	}
+	result, err := s.dependencies.Diffs.MetricsEvidence(request.Context(), diffID, values.Get("metricsTaskId"))
+	if err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	if result.Curves == nil {
+		result.Curves = []metricsanalysis.Curve{}
+	}
+	writeJSON(writer, http.StatusOK, result)
 }
 
 func (s *server) handleDiffAuditEvidence(writer http.ResponseWriter, request *http.Request, diffID string) {

@@ -18,6 +18,7 @@ import (
 	backend "etcd-analyzer/internal/backend/bbolt"
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/loganalysis"
+	"etcd-analyzer/internal/metricsanalysis"
 	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
@@ -67,6 +68,7 @@ type DiffService interface {
 	DiffNamespaces(context.Context, string, storage.DiffDeltaQuery) ([]domain.NamespaceDelta, error)
 	DiffLogEvidence(context.Context, string, string, storage.LogQuery) (loganalysis.DiffEvidence, error)
 	DiffAuditEvidence(context.Context, string, string, storage.AuditQuery) (auditanalysis.Evidence, error)
+	MetricsEvidence(context.Context, string, string) (metricsanalysis.DiffEvidence, error)
 }
 
 // LogService is the structured log timeline query boundary.
@@ -79,16 +81,23 @@ type AuditService interface {
 	AuditTimeline(context.Context, string, storage.AuditQuery) (storage.AuditTimelineResult, error)
 }
 
+// MetricsService is the normalized core metrics timeline query boundary.
+type MetricsService interface {
+	MetricsTimeline(context.Context, string, storage.MetricsQuery) (metricsanalysis.Timeline, error)
+}
+
 // Dependencies configure the API handler.
 type Dependencies struct {
 	Version       string
 	Tasks         TaskService
+	TaskLogs      TaskLogService
 	Analysis      AnalysisService
 	MVCC          MVCCService
 	Kubernetes    KubernetesService
 	Diffs         DiffService
 	Logs          LogService
 	Audits        AuditService
+	Metrics       MetricsService
 	MaxInputBytes int64
 	UI            http.Handler
 }
@@ -193,6 +202,14 @@ func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, r
 		return
 	}
 	id := parts[0]
+	if len(parts) == 2 && parts[1] == "logs" {
+		if request.Method != http.MethodGet {
+			methodNotAllowed(writer)
+			return
+		}
+		s.handleTaskLogs(writer, request, id)
+		return
+	}
 	if len(parts) >= 2 && request.Method == http.MethodGet && s.handleKubernetes(writer, request, id, parts[1:]) {
 		return
 	}
@@ -204,6 +221,14 @@ func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, r
 		return
 	}
 	if len(parts) == 2 {
+		if parts[1] == "metrics-timeline" {
+			if request.Method != http.MethodGet {
+				methodNotAllowed(writer)
+				return
+			}
+			s.handleMetricsTimeline(writer, request, id)
+			return
+		}
 		if parts[1] == "audit-timeline" {
 			if request.Method != http.MethodGet {
 				methodNotAllowed(writer)

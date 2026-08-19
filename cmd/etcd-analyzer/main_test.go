@@ -13,6 +13,7 @@ import (
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
+	"etcd-analyzer/internal/worker"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -23,6 +24,45 @@ func TestRunVersion(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout.String()) != "dev" {
 		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
+func TestRunWorkerPanicWritesResultAndReturns(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "tasks", "task-id")
+	if err := os.MkdirAll(taskDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request := worker.Request{TaskID: "task-id", RunID: "0123456789abcdef", Mode: worker.ModeAnalysis}
+	if err := worker.WriteRequest(taskDir, request); err != nil {
+		t.Fatal(err)
+	}
+	previousOperation := workerRunOperation
+	previousStdin := workerStdin
+	defer func() {
+		workerRunOperation = previousOperation
+		workerStdin = previousStdin
+	}()
+	workerStdin = strings.NewReader("")
+	workerRunOperation = func(context.Context, worker.Request) error {
+		panic("injected worker panic")
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWorker([]string{
+		"--mode", "analysis", "--data-dir", root, "--task", "task-id", "--run", request.RunID,
+	}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	result, err := worker.ReadResult(taskDir, request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorCode != "WORKER_PANIC" || result.ExitCode != 1 {
+		t.Fatalf("result=%+v", result)
+	}
+	if !strings.Contains(stderr.String(), "panic") || !strings.Contains(stderr.String(), "goroutine") {
+		t.Fatalf("stderr=%q", stderr.String())
 	}
 }
 
@@ -44,6 +84,32 @@ func TestRunServerStopsWithContext(t *testing.T) {
 	code := <-done
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRunServerPersistsAndReleasesRuntimeState(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	stdout := &listeningWriter{ready: make(chan struct{})}
+	var stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- runServer(ctx, []string{"--data-dir", root, "--listen", "127.0.0.1:0"}, stdout, &stderr)
+	}()
+	select {
+	case <-stdout.ready:
+	case code := <-done:
+		t.Fatalf("server exited before listening: code=%d stderr=%q", code, stderr.String())
+	}
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "logs", "server.log")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "runtime", "server.lock")); !os.IsNotExist(err) {
+		t.Fatalf("server lock remains: %v", err)
 	}
 }
 
@@ -163,6 +229,29 @@ func TestRunAnalyzeAuditTask(t *testing.T) {
 	}
 	if helpCode := run([]string{"analyze", "--help"}, &stdout, &stderr); helpCode != 0 || !strings.Contains(stderr.String(), "audit") {
 		t.Fatalf("helpCode=%d help=%q", helpCode, stderr.String())
+	}
+}
+
+func TestRunAnalyzeMetricsTask(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "metrics.json")
+	input := `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"etcd_mvcc_db_total_size_in_bytes","instance":"m1"},"values":[[1,"10"]]}]}}`
+	if err := os.WriteFile(source, []byte(input), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "data")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"analyze", "--input", source, "--type", "metrics", "--output", output}, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), "completed") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	manifests, _ := filepath.Glob(filepath.Join(output, "tasks", "*", "manifest.json"))
+	manifest, err := os.ReadFile(manifests[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(manifest, []byte(`"inputFile": "source/input.metrics"`)) || !bytes.Contains(manifest, []byte(`"currentStage": "completed"`)) {
+		t.Fatalf("manifest=%s", manifest)
 	}
 }
 

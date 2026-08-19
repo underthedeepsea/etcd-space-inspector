@@ -3,6 +3,7 @@ package kube
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -51,6 +52,31 @@ func TestAnalyzeFieldsLimitsAdditionalPaths(t *testing.T) {
 	}
 	if len(fields) != 21 {
 		t.Fatalf("field count=%d fields=%+v", len(fields), fields)
+	}
+}
+
+func TestAnalyzeFieldsRejectsDepthLimit(t *testing.T) {
+	root := map[string]any{}
+	current := root
+	for index := 0; index < 129; index++ {
+		next := map[string]any{}
+		current["nested"] = next
+		current = next
+	}
+	_, err := AnalyzeFields(root)
+	if !errors.Is(err, ErrFieldLimitExceeded) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestAnalyzeFieldsRejectsNodeLimit(t *testing.T) {
+	root := map[string]any{}
+	for index := 0; index < 50001; index++ {
+		root[string(rune(index))] = index
+	}
+	_, err := AnalyzeFields(root)
+	if !errors.Is(err, ErrFieldLimitExceeded) {
+		t.Fatalf("err=%v", err)
 	}
 }
 

@@ -33,6 +33,18 @@ func migrate(db *sql.DB) error {
 		if err != sql.ErrNoRows {
 			return fmt.Errorf("check migration %s: %w", name, err)
 		}
+		// Some upgrade fixtures mark an optional feature migration as applied
+		// without materializing its tables. A later additive index must not make
+		// opening that legacy database fail; the owning feature migration remains
+		// authoritative for creating the table.
+		if name == "009_m12_kube_performance.sql" {
+			var table string
+			if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'kube_field_records'`).Scan(&table); err == sql.ErrNoRows {
+				continue
+			} else if err != nil {
+				return fmt.Errorf("check Kubernetes field table: %w", err)
+			}
+		}
 		contents, err := migrations.Files.ReadFile(name)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)

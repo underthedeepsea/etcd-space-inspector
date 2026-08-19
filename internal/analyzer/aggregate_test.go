@@ -47,3 +47,36 @@ func TestMaterializeSeparatesCurrentHistoryAndTombstones(t *testing.T) {
 		t.Fatalf("prefixes=%+v err=%v", prefixes, err)
 	}
 }
+
+func TestMaterializeReportsMVCCAggregateProgress(t *testing.T) {
+	db, err := storage.Open(filepath.Join(t.TempDir(), "task.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := storage.NewMVCCRepository(db, "t1")
+	if err := repo.StoreRevisions(context.Background(), []mvcc.Revision{
+		{KeyHash: "x", KeyText: "/a/x", KeyBytes: 3, ValueBytes: 4, StoredBytes: 7, MainRevision: 1},
+		{KeyHash: "y", KeyText: "/a/y", KeyBytes: 3, ValueBytes: 5, StoredBytes: 8, MainRevision: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stages []string
+	if err := Materialize(context.Background(), db, "t1", 1, func(stage string, processed, total int64) {
+		stages = append(stages, stage)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsStages(stages, "mvcc-key-aggregate") || !containsStages(stages, "mvcc-prefix-aggregate") {
+		t.Fatalf("stages=%v", stages)
+	}
+}
+
+func containsStages(stages []string, want string) bool {
+	for _, stage := range stages {
+		if stage == want {
+			return true
+		}
+	}
+	return false
+}

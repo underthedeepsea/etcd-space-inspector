@@ -1,6 +1,6 @@
 # etcd Space Inspector
 
-etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。它支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析、Key 保留 revision 活跃度、两个已完成 Snapshot 任务之间的持久化空间差分、独立的 etcd 日志时间线，以及 Kubernetes Audit 写入来源证据匹配。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
+etcd Space Inspector 是一个单机、离线、零外部数据库依赖的 etcd 数据库取证工具。它支持安全导入与任务管理、Generic bbolt 物理空间分析、经过版本门控的 etcd 3.4 MVCC 分析、Kubernetes Resource/Namespace/对象/字段分析、Key 保留 revision 活跃度、两个已完成 Snapshot 任务之间的持久化空间差分、独立的 etcd 日志时间线、Kubernetes Audit 写入来源证据，以及 Prometheus 核心指标时间关联。结果可通过本地 Web UI、JSON API 和独立 HTML 报告查看。
 
 发布版本、对应标签和分支规则见 [RELEASE.md](RELEASE.md)。
 
@@ -79,6 +79,12 @@ bin/etcd-analyzer analyze \
   --type audit \
   --output ./analysis-data
 
+# 导入 Prometheus HTTP API query_range 的 success/matrix JSON
+bin/etcd-analyzer analyze \
+  --input ./etcd-metrics.json \
+  --type metrics \
+  --output ./analysis-data
+
 # 比较两个已完成的分析任务
 # 采集时间必须是实际 Snapshot 采集时间，两个参数要同时提供或同时省略。
 # 提供后，结果会显示净保留 revision 的每小时变化速率。
@@ -117,6 +123,16 @@ security:
 ```
 
 `workerCount` 是 MVCC/Kubernetes 解码 worker 的上限；默认会取逻辑 CPU 数与 4 的较小值。`channelSize` 限制流水线中的在途记录，避免大 Value 导致不必要的内存峰值。`sqliteBatchSize` 保持 1000，以控制事务写入峰值。`maxInputBytes` 只是输入安全上限，不会提高导入速度。
+
+### M12 大 Snapshot 运行与诊断
+
+`snapshot` 和 `raw-db` 的导入、分析由同一可执行文件的隐藏 Worker 子进程执行；服务进程继续提供 API/UI，Worker 退出不会直接终止服务。服务日志写入 `analysis-data/logs/server.log`，当前任务 run 日志写入 `analysis-data/tasks/<task-id>/logs/<run-id>.log`。日志 API `GET /api/v1/tasks/{id}/logs?tail=200` 只接受 1–200 行，最多读取 256 KiB，并只返回任务目录内的相对路径、大小、修改时间和尾部行。
+
+Snapshot 任务状态依次可能为 `importing`、`pending`、`running`、`completed`、`failed` 或 `cancelled`。任务页展示导入字节进度、MVCC/Kubernetes 子阶段、已处理/总数、速率、耗时、最近心跳、满足 5 秒样本条件时的 ETA 和退出码。已知总量使用原生进度条；未知总量只显示文字状态。取消会关闭 Worker 控制管道，Worker 有限时间内退出；超时则由 Manager 强制终止，并把任务落到终态。
+
+可配置参数有硬上限：`workerCount` 为 1–8，`channelSize` 为 1–4096，`sqliteBatchSize` 为 1–10000，同时分析任务为 1–2。单个 Kubernetes Value 超过 32 MiB、JSON 深度超过 128 或字段节点超过 50,000 时只保留安全元数据；最大字段候选只保留 20 项。Windows PowerShell 的 `check.ps1` 会在完整测试后串行运行 M12 Worker/lease/recovery 聚焦测试，`build.ps1` 生成 `bin\etcd-analyzer.exe`。
+
+M12 不把 Snapshot 差分任务迁移到 Worker；差分仍由父进程管理，Worker 隔离故障不会覆盖差分任务的剩余风险。Kubernetes 流式字段差异和 SQLite statement 复用已加入可选 20,000 修订长测；性能需结合同机数据规模、SQLite 版本和磁盘复测，不能把单次基准当成通用 SLA。
 
 使用示例：
 
@@ -167,6 +183,28 @@ GET /api/v1/diffs/{diffId}/audit-evidence?auditTaskId=<id>&page=1&pageSize=100
 
 窗口固定为 `(baselineObservedAt,targetObservedAt]`。high 表示 Audit 对象哈希精确命中正增长对象；medium 表示正增长 Resource 与 Namespace 同时命中；low 表示只命中 Resource 或 Namespace；unverified 事件只保留在时间线，不进入候选排行。候选按用户、客户端和来源网段的不可逆指纹聚合。由于 Snapshot 与 Audit 没有可信 Cluster ID，`sourceCompatibility` 始终为 `unverified`；匹配属于结构证据，不代表责任或因果已经证明。
 
+## 核心指标与 Snapshot 时间关联
+
+`metrics` 任务只读取本地 Prometheus HTTP API `query_range` 成功 `matrix` JSON，不连接 Prometheus。支持 DB total、DB in-use、backend quota、MVCC put/delete Counter、backend commit histogram 和 WAL fsync histogram 的 etcd 稳定指标名，并兼容相应 3.4 debugging 别名；新旧别名同时存在时优先稳定名。
+
+指标时间线接口为：
+
+```text
+GET /api/v1/tasks/{taskId}/metrics-timeline?from=<RFC3339>&to=<RFC3339>&metricType=<type>&instance=<instance>&page=1&pageSize=100
+```
+
+带实际采集时间的双 Snapshot 差分可关联一个已完成 metrics 任务：
+
+```text
+GET /api/v1/diffs/{diffId}/metrics-evidence?metricsTaskId=<id>
+```
+
+增长起点定义为超过 `max(8 MiB, 窗口基线的 1%)` 并连续保持三个样本。多 Member 的 DB total/in-use 取同一时刻最大值，quota 取最小正值，不把 Member 容量相加。Put/Delete 速率按 Counter 相邻非负增量计算；Counter 重置和超过中位采样间隔三倍的缺口区间会被跳过。直方图先合并同一时刻、同一 bucket 的 Member 增量，再估算 P99。
+
+`db_total - db_in_use` 只在同一实例、同一采样时刻计算，是 defrag 后可能释放的物理差值，不是 compaction 可释放空间，也不是保证回收量。指标来源与 Snapshot 的集群一致性始终标记为 `unverified`，时间重合不代表因果。工具不会自动提高 quota，也不会执行 compact 或 defrag。
+
+原始 JSON 只保存在任务的 `source/input.metrics`。标准化数据库与 API 仅保留固定指标、数值和 `instance`、`job`、`member_id`、`le` 白名单标签，不保存原始查询、URL、认证信息、未知标签或完整响应。
+
 ## 数据目录
 
 ```text
@@ -175,9 +213,10 @@ analysis-data/
 │   └── <task-id>/
 │       ├── manifest.json
 │       ├── task.db
-│       ├── source/input.db（Snapshot/raw-db）、source/input.log（日志）或 source/input.audit（Audit）
+│       ├── source/input.db（Snapshot/raw-db）、source/input.log（日志）、source/input.audit（Audit）或 source/input.metrics（指标）
 │       ├── exports/report.html
 │       └── logs/
+├── logs/server.log（服务生命周期与 Worker 管理日志）
 └── diffs/
     └── <diff-id>/
         ├── manifest.json
@@ -193,6 +232,7 @@ analysis-data/
 - `POST /api/v1/tasks`
 - `GET /api/v1/tasks`
 - `GET /api/v1/tasks/{id}`
+- `GET /api/v1/tasks/{id}/logs?tail=200`
 - `POST /api/v1/tasks/{id}/start`
 - `POST /api/v1/tasks/{id}/cancel`
 - `DELETE /api/v1/tasks/{id}`
@@ -213,6 +253,7 @@ analysis-data/
 - `GET /api/v1/tasks/{id}/objects/{object-id}/revisions`
 - `GET /api/v1/tasks/{id}/timeline`
 - `GET /api/v1/tasks/{id}/audit-timeline`
+- `GET /api/v1/tasks/{id}/metrics-timeline`
 - `POST /api/v1/diffs`
 - `GET /api/v1/diffs`
 - `GET /api/v1/diffs/{id}`
@@ -224,6 +265,7 @@ analysis-data/
 - `GET /api/v1/diffs/{id}/objects`
 - `GET /api/v1/diffs/{id}/log-evidence`
 - `GET /api/v1/diffs/{id}/audit-evidence`
+- `GET /api/v1/diffs/{id}/metrics-evidence`
 - `POST /api/v1/diffs/{id}/cancel`
 - `DELETE /api/v1/diffs/{id}`
 
