@@ -90,6 +90,7 @@ type MetricsService interface {
 type Dependencies struct {
 	Version       string
 	Tasks         TaskService
+	TaskLogs      TaskLogService
 	Analysis      AnalysisService
 	MVCC          MVCCService
 	Kubernetes    KubernetesService
@@ -201,6 +202,14 @@ func (s *server) handleTask(writer http.ResponseWriter, request *http.Request, r
 		return
 	}
 	id := parts[0]
+	if len(parts) == 2 && parts[1] == "logs" {
+		if request.Method != http.MethodGet {
+			methodNotAllowed(writer)
+			return
+		}
+		s.handleTaskLogs(writer, request, id)
+		return
+	}
 	if len(parts) >= 2 && request.Method == http.MethodGet && s.handleKubernetes(writer, request, id, parts[1:]) {
 		return
 	}

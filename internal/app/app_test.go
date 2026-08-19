@@ -82,6 +82,34 @@ func TestGetWaitsForTerminalTaskCleanup(t *testing.T) {
 	}
 }
 
+func TestTaskLogsUsesCurrentContainedRunLog(t *testing.T) {
+	root := t.TempDir()
+	application := New(filepath.Join(root, "data"), nil)
+	item := createApplicationTask(t, application, "task-log")
+	logPath := filepath.Join(application.manifests.TaskDir(item.ID), "logs", "run.log")
+	if err := os.WriteFile(logPath, []byte("first\nsecond\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	item.LogFile = "logs/run.log"
+	if err := application.manifests.Save(item); err != nil {
+		t.Fatal(err)
+	}
+	result, err := application.TaskLogs(context.Background(), item.ID, 1)
+	if err != nil || result.Path != "logs/run.log" || result.Size != int64(len("first\nsecond\n")) || len(result.Lines) != 1 || result.Lines[0] != "second" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+
+	for _, relative := range []string{"../manifest.json", "logs/../manifest.json", filepath.Join(root, "outside.log"), "logs/missing.log"} {
+		item.LogFile = relative
+		if err := application.manifests.Save(item); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := application.TaskLogs(context.Background(), item.ID, 1); !os.IsNotExist(err) {
+			t.Fatalf("relative=%q err=%v", relative, err)
+		}
+	}
+}
+
 func createApplicationTask(t *testing.T, application *Application, name string) task.Task {
 	t.Helper()
 	root := t.TempDir()

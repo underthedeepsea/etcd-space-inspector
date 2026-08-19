@@ -61,6 +61,8 @@ import {
   SpaceSummary,
   startTask,
   Task,
+  TaskLogResult,
+  taskLogs,
   EvidenceCount,
   KubernetesObject,
   KubernetesSummary,
@@ -115,10 +117,51 @@ function formatDate(value: string, locale: Locale): string {
 
 function statusLabel(status: string, t: Translate): string {
   const keys: Record<string, TextKey> = {
-    pending: 'status.pending', running: 'status.running', completed: 'status.completed',
+    pending: 'status.pending', importing: 'status.importing', running: 'status.running', completed: 'status.completed',
     failed: 'status.failed', cancelled: 'status.cancelled',
   };
   return t(keys[status] ?? 'value.unavailable');
+}
+
+const stageTextKeys: Record<string, TextKey> = {
+  'worker-starting': 'stage.worker-starting', 'import-copy': 'stage.import-copy',
+  'bbolt-physical': 'stage.bbolt-physical', 'physical-open': 'stage.physical-open',
+  'physical-integrity-check': 'stage.physical-integrity-check', 'physical-page-scan': 'stage.physical-page-scan',
+  'mvcc-semantic': 'stage.mvcc-semantic', 'mvcc-scan': 'stage.mvcc-scan', 'mvcc-write': 'stage.mvcc-write',
+  'mvcc-key-aggregate': 'stage.mvcc-key-aggregate', 'mvcc-prefix-aggregate': 'stage.mvcc-prefix-aggregate',
+  'mvcc-summary': 'stage.mvcc-summary', 'kubernetes-object-aggregate': 'stage.kubernetes-object-aggregate',
+  'kubernetes-diff-aggregate': 'stage.kubernetes-diff-aggregate', 'kubernetes-resource-aggregate': 'stage.kubernetes-resource-aggregate',
+  'kubernetes-namespace-aggregate': 'stage.kubernetes-namespace-aggregate', 'kubernetes-summary-aggregate': 'stage.kubernetes-summary-aggregate',
+  'report-generate': 'stage.report-generate', 'log-parse': 'stage.log-parse', 'audit-parse': 'stage.audit-parse',
+  'metrics-parse': 'stage.metrics-parse', completed: 'stage.completed', failed: 'stage.failed', cancelled: 'stage.cancelled',
+};
+
+function stageLabel(stage: string | undefined, t: Translate): string {
+  if (!stage) return t('stage.none');
+  return t(stageTextKeys[stage] ?? 'stage.unknown', { stage });
+}
+
+function formatDuration(seconds: number | undefined, t: Translate): string {
+  if (seconds === undefined) return t('progress.unavailable');
+  const safe = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const remaining = safe % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${remaining}s`;
+  if (minutes > 0) return `${minutes}m ${remaining}s`;
+  return `${remaining}s`;
+}
+
+function formatRate(rate: number | undefined, unit: string | undefined, t: Translate): string {
+  if (rate === undefined || rate <= 0) return t('progress.unavailable');
+  const digits = rate >= 10 ? 0 : 1;
+  return `${rate.toFixed(digits)} ${unit || 'items'}${t('progress.perSecondSuffix')}`;
+}
+
+function heartbeatStale(task: Task): boolean {
+  if (task.status !== 'importing' && task.status !== 'running') return false;
+  if (!task.heartbeatAt) return false;
+  return Date.now() - new Date(task.heartbeatAt).getTime() > 10_000;
 }
 
 function inputTypeLabel(inputType: string, t: Translate): string {
@@ -157,6 +200,7 @@ export default function App() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedLogTask, setSelectedLogTask] = useState<Task | null>(null);
   const [baselineTask, setBaselineTask] = useState<string | null>(null);
 	const [comparisonTarget, setComparisonTarget] = useState<Task | null>(null);
   const [selectedDiff, setSelectedDiff] = useState<string | null>(null);
@@ -164,6 +208,7 @@ export default function App() {
     window.localStorage.getItem(languagePreferenceKey), window.navigator.language,
   ));
   const t = useCallback<Translate>((key, values) => text(locale, key, values), [locale]);
+  const openLogTask = selectedLogTask ? tasks.find((item) => item.taskId === selectedLogTask.taskId) ?? selectedLogTask : null;
 
   function selectLocale(nextLocale: Locale) {
     setLocale(nextLocale);
@@ -289,15 +334,16 @@ export default function App() {
                 <tr key={task.taskId}>
                   <td><strong>{task.name}</strong><small>{task.sha256.slice(0, 12)}</small><small>{versionEvidence(task, t)}</small></td>
                   <td>{inputTypeLabel(task.inputType, t)}</td><td>{formatBytes(task.inputSize)}</td><td><span className={`badge ${task.status}`}>{statusLabel(task.status, t)}</span></td>
-                  <td><progress max="1" value={task.progress}>{Math.round(task.progress * 100)}%</progress></td>
+                  <td><TaskProgress task={task} /></td>
                   <td>{formatDate(task.createdAt, locale)}</td>
                   <td className="actions">
                     {task.status === 'completed' && <button onClick={() => setSelectedTask(task)}>{t('tasks.inspect')}</button>}
                     {task.status === 'completed' && task.inputType !== 'log' && task.inputType !== 'audit' && task.inputType !== 'metrics' && baselineTask !== task.taskId && <button disabled={busy} onClick={() => baselineTask ? configureComparison(task) : setBaselineTask(task.taskId)}>{baselineTask ? t('tasks.compare') : t('tasks.setBaseline')}</button>}
                     {task.status === 'completed' && task.inputType !== 'log' && task.inputType !== 'audit' && task.inputType !== 'metrics' && baselineTask === task.taskId && <button type="button" onClick={() => setBaselineTask(null)}>{t('tasks.baseline')}</button>}
                     {task.status === 'pending' && <button disabled={busy} onClick={() => void action(() => startTask(task.taskId), t('tasks.started'))}>{t('tasks.start')}</button>}
-                    {task.status === 'running' && <button disabled={busy} onClick={() => void action(() => cancelTask(task.taskId), t('tasks.cancelled'))}>{t('tasks.cancel')}</button>}
-                    {task.status !== 'running' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteTask(task.taskId), t('tasks.deleted'))}>{t('tasks.delete')}</button>}
+                    {(task.status === 'importing' || task.status === 'running') && <button disabled={busy} onClick={() => void action(() => cancelTask(task.taskId), t('tasks.cancelled'))}>{t('tasks.cancel')}</button>}
+                    {(task.status === 'importing' || task.status === 'running' || task.status === 'failed' || task.status === 'cancelled') && <button type="button" onClick={() => setSelectedLogTask(task)}>{t('tasks.viewLog')}</button>}
+                    {task.status !== 'running' && task.status !== 'importing' && <button className="danger" disabled={busy} onClick={() => void action(() => deleteTask(task.taskId), t('tasks.deleted'))}>{t('tasks.delete')}</button>}
                   </td>
                 </tr>
               ))}
@@ -306,6 +352,7 @@ export default function App() {
           </table>
         </div>
       </section>
+      {openLogTask && <TaskLogPanel task={openLogTask} onClose={() => setSelectedLogTask(null)} />}
       {comparisonTarget && baselineTask && <section className="panel" aria-labelledby="comparison-config-heading">
         <h2 id="comparison-config-heading">{t('comparison.configure')}</h2>
         <form onSubmit={compare} className="task-form">
@@ -332,6 +379,64 @@ export default function App() {
     </main>
     </TranslationContext.Provider>
   );
+}
+
+function TaskProgress({ task }: { task: Task }) {
+  const { locale, t } = useTranslation();
+  const hasTotal = task.total !== undefined && task.total > 0;
+  const processed = Math.max(0, task.processed ?? 0);
+  const total = task.total ?? 0;
+  const stageProgress = Math.max(0, Math.min(1, task.stageProgress ?? (hasTotal ? processed / total : task.progress)));
+  return <div className="task-progress">
+    {hasTotal
+      ? <progress max={total} value={Math.min(processed, total)} aria-label={t('progress.aria', { stage: stageLabel(task.currentStage, t) })}>{Math.round(stageProgress * 100)}%</progress>
+      : <span className="progress-text">{task.stageProgress !== undefined || task.progress > 0 ? `${Math.round(stageProgress * 100)}%` : t('progress.unknown')}</span>}
+    <small>{stageLabel(task.currentStage, t)}</small>
+    {hasTotal && <small>{t('progress.processed', { processed, total, unit: task.unit || t('progress.items') })}</small>}
+    <small>{t('progress.rate')}: {formatRate(task.ratePerSecond, task.unit, t)}</small>
+    <small>{t('progress.elapsed')}: {formatDuration(task.elapsedSeconds, t)}</small>
+    {task.estimatedRemainingSeconds !== undefined && <small>{t('progress.eta', { value: formatDuration(task.estimatedRemainingSeconds, t) })}</small>}
+    {task.heartbeatAt && <small>{t('progress.heartbeat', { value: formatDate(task.heartbeatAt, locale) })}</small>}
+    {heartbeatStale(task) && <small className="heartbeat-warning">{t('progress.heartbeatWarning')}</small>}
+    {task.exitCode !== undefined && task.status !== 'completed' && <small>{t('progress.exitCode', { code: task.exitCode })}</small>}
+  </div>;
+}
+
+function TaskLogPanel({ task, onClose }: { task: Task; onClose: () => void }) {
+  const { t } = useTranslation();
+  const [result, setResult] = useState<TaskLogResult | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      try {
+        const next = await taskLogs(task.taskId, 200);
+        if (!active) return;
+        setResult(next);
+        setError('');
+      } catch (reason: unknown) {
+        if (active) setError(reason instanceof Error ? reason.message : t('taskLogs.loadFailed'));
+      }
+    }
+    void load();
+    const timer = window.setInterval(() => void load(), 2000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [task.taskId, t]);
+
+  return <section className="panel task-log-panel" aria-labelledby="task-log-heading">
+    <div className="section-title"><h2 id="task-log-heading">{t('taskLogs.title')}</h2><button type="button" onClick={onClose}>{t('actions.close')}</button></div>
+    <p><strong>{task.name}</strong> · {stageLabel(task.currentStage, t)} · {result?.path || t('taskLogs.pathUnavailable')}</p>
+    {error && <p role="alert">{error}</p>}
+    {result && <>
+      <p className="log-range">{t('taskLogs.meta', { size: formatBytes(result.size), modifiedAt: result.modifiedAt })}</p>
+      <pre className="task-log" aria-live="polite">{result.lines.join('\n') || t('taskLogs.empty')}</pre>
+    </>}
+    {!result && !error && <p>{t('taskLogs.loading')}</p>}
+  </section>;
 }
 
 function DiffAnalysis({ diffId, tasks, onClose }: { diffId: string; tasks: Task[]; onClose: () => void }) {

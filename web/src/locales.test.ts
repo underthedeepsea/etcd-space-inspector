@@ -35,6 +35,25 @@ for (const key of churnKeys) {
   }
 }
 
+const taskProgressKeys: TextKey[] = [
+  'tasks.viewLog', 'taskLogs.title', 'taskLogs.loading', 'taskLogs.loadFailed', 'taskLogs.empty',
+  'taskLogs.pathUnavailable', 'taskLogs.meta', 'status.importing', 'progress.unknown',
+  'progress.unavailable', 'progress.items', 'progress.perSecondSuffix', 'progress.processed',
+  'progress.rate', 'progress.elapsed', 'progress.eta', 'progress.heartbeat',
+  'progress.heartbeatWarning', 'progress.exitCode', 'progress.aria', 'stage.none',
+  'stage.unknown', 'stage.worker-starting', 'stage.import-copy', 'stage.bbolt-physical',
+  'stage.physical-open', 'stage.physical-integrity-check', 'stage.physical-page-scan',
+  'stage.mvcc-semantic', 'stage.mvcc-scan', 'stage.mvcc-write', 'stage.mvcc-key-aggregate',
+  'stage.mvcc-prefix-aggregate', 'stage.mvcc-summary', 'stage.kubernetes-object-aggregate',
+  'stage.kubernetes-diff-aggregate', 'stage.kubernetes-resource-aggregate',
+  'stage.kubernetes-namespace-aggregate', 'stage.kubernetes-summary-aggregate',
+  'stage.report-generate', 'stage.log-parse', 'stage.audit-parse', 'stage.metrics-parse',
+  'stage.completed', 'stage.failed', 'stage.cancelled',
+];
+for (const key of taskProgressKeys) {
+  for (const locale of ['zh', 'en'] as const) assert.ok(text(locale, key).length > 0);
+}
+
 const logKeys: TextKey[] = [
   'form.log',
   'form.logHint',

@@ -236,7 +236,7 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return 1
 	}
 	handler := api.New(api.Dependencies{
-		Version: version.Value, Tasks: application, Analysis: application, MVCC: application, Kubernetes: application, Diffs: application, Logs: application, Audits: application, Metrics: application,
+		Version: version.Value, Tasks: application, TaskLogs: application, Analysis: application, MVCC: application, Kubernetes: application, Diffs: application, Logs: application, Audits: application, Metrics: application,
 		MaxInputBytes: settings.Security.MaxInputBytes, UI: web.Handler(),
 	})
 	listener, err := net.Listen("tcp", settings.Server.Listen)

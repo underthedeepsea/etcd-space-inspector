@@ -18,6 +18,7 @@ import (
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/report"
+	"etcd-analyzer/internal/runlog"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 	"etcd-analyzer/internal/worker"
@@ -329,6 +330,51 @@ func (a *Application) Get(ctx context.Context, id string) (task.Task, error) {
 		}
 	}
 	return item, nil
+}
+
+// TaskLogs returns a bounded tail of the current run log without exposing the
+// data-directory path or allowing a manifest path to escape task/logs.
+func (a *Application) TaskLogs(ctx context.Context, id string, tail int) (task.TaskLogResult, error) {
+	if err := ctx.Err(); err != nil {
+		return task.TaskLogResult{}, err
+	}
+	if tail < 1 || tail > 200 {
+		return task.TaskLogResult{}, fmt.Errorf("log tail out of range")
+	}
+	item, err := a.manifests.Get(id)
+	if err != nil {
+		return task.TaskLogResult{}, err
+	}
+	relative := filepath.ToSlash(filepath.Clean(item.LogFile))
+	if !strings.HasPrefix(relative, "logs/") {
+		return task.TaskLogResult{}, os.ErrNotExist
+	}
+	path, err := a.manifests.ResolveTaskRelative(id, relative)
+	if err != nil {
+		return task.TaskLogResult{}, os.ErrNotExist
+	}
+	logsRoot, err := a.manifests.ResolveTaskRelative(id, "logs")
+	if err != nil {
+		return task.TaskLogResult{}, os.ErrNotExist
+	}
+	within, err := filepath.Rel(logsRoot, path)
+	if err != nil || within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
+		return task.TaskLogResult{}, os.ErrNotExist
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return task.TaskLogResult{}, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return task.TaskLogResult{}, os.ErrNotExist
+	}
+	lines, err := runlog.Tail(path, tail, 256<<10)
+	if err != nil {
+		return task.TaskLogResult{}, err
+	}
+	return task.TaskLogResult{
+		Path: filepath.ToSlash(relative), Size: info.Size(), ModifiedAt: info.ModTime().UTC(), Lines: lines,
+	}, nil
 }
 
 // Start begins analysis in the background.

@@ -1,4 +1,4 @@
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type TaskStatus = 'pending' | 'importing' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface Task {
   taskId: string;
@@ -14,9 +14,32 @@ export interface Task {
   status: TaskStatus;
   progress: number;
   currentStage?: string;
+  runId?: string;
+  runKind?: 'import' | 'analysis';
+  workerPid?: number;
+  stageProgress?: number;
+  processed?: number;
+  total?: number;
+  unit?: string;
+  ratePerSecond?: number;
+  heartbeatAt?: string;
+  elapsedSeconds?: number;
+  estimatedRemainingSeconds?: number;
+  logFile?: string;
+  exitCode?: number;
   errorCode?: string;
   errorMessage?: string;
   createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  schemaVersion?: number;
+}
+
+export interface TaskLogResult {
+  path: string;
+  size: number;
+  modifiedAt: string;
+  lines: string[];
 }
 
 export interface CreateTask {
@@ -494,6 +517,10 @@ export function cancelTask(id: string): Promise<void> {
 
 export function deleteTask(id: string): Promise<void> {
   return request(`/api/v1/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function taskLogs(taskId: string, tail = 200): Promise<TaskLogResult> {
+  return request(`/api/v1/tasks/${encodeURIComponent(taskId)}/logs?tail=${tail}`);
 }
 
 export function getOverview(id: string): Promise<SpaceSummary> {
