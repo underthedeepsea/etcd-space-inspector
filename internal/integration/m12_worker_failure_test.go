@@ -259,7 +259,9 @@ func runM12WorkerHelper() {
 		_ = os.WriteFile(filepath.Join(taskDir, worker.ResultFileName), []byte(`{"runId":"wrong"}`), 0o600)
 		os.Exit(0)
 	case "hang":
-		select {}
+		for {
+			time.Sleep(time.Hour)
+		}
 	default:
 		os.Exit(23)
 	}

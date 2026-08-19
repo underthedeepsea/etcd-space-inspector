@@ -197,14 +197,6 @@ func (m *Manager) Start(ctx context.Context, request Request) (task.Task, error)
 		m.failStart(item, request.RunID, logFile, lease, "WORKER_START_FAILED", err)
 		return task.Task{}, err
 	}
-	item.WorkerPID = command.Process.Pid
-	if err := m.tasks.SaveForRun(item, request.RunID); err != nil {
-		_ = command.Process.Kill()
-		_ = control.Close()
-		_ = command.Wait()
-		m.failStart(item, request.RunID, logFile, lease, "WORKER_START_FAILED", err)
-		return task.Task{}, err
-	}
 	run := &managedRun{manager: m, taskID: item.ID, runID: request.RunID, mode: request.Mode, taskDir: m.tasks.TaskDir(item.ID), command: command, control: control, log: logFile, lease: lease, done: make(chan struct{})}
 	m.mu.Lock()
 	if m.shuttingDown {
@@ -240,7 +232,24 @@ func (m *Manager) Cancel(taskID string) error {
 		return fmt.Errorf("task %s is not running", taskID)
 	}
 	run.markCancelled()
-	return run.closeControl()
+	if err := run.closeControl(); err != nil {
+		return err
+	}
+	go m.killAfterCancel(run)
+	return nil
+}
+
+func (m *Manager) killAfterCancel(run *managedRun) {
+	timer := time.NewTimer(m.config.ShutdownTimeout)
+	defer timer.Stop()
+	select {
+	case <-run.done:
+		return
+	case <-timer.C:
+		if run.command.Process != nil {
+			_ = run.command.Process.Kill()
+		}
+	}
 }
 
 // Shutdown cancels all workers and kills those that do not exit in time.
@@ -293,21 +302,10 @@ func (m *Manager) heartbeat(run *managedRun) {
 		case <-ticker.C:
 			if err := run.lease.Heartbeat(); err != nil {
 				m.logEvent("lease-heartbeat-failed", run, err)
-				continue
 			}
-			item, err := m.tasks.Get(run.taskID)
-			if err != nil {
-				m.logEvent("task-read-failed", run, err)
-				continue
-			}
-			now := time.Now().UTC()
-			item.HeartbeatAt = &now
-			if item.StartedAt != nil {
-				item.ElapsedSeconds = int64(now.Sub(*item.StartedAt).Seconds())
-			}
-			if err := m.tasks.SaveForRun(item, run.runID); err != nil {
-				m.logEvent("manifest-heartbeat-failed", run, err)
-			}
+			// The worker is the sole runtime manifest writer. The parent only
+			// renews the lease so Windows cannot observe concurrent manifest
+			// replacement handles from two processes.
 		case <-run.done:
 			return
 		}

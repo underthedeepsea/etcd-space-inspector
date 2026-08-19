@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -220,12 +221,16 @@ func (s *Service) Get(id string) (Task, error) {
 }
 
 func readManifest(path string) ([]byte, error) {
-	for attempt := 0; attempt < 5; attempt++ {
+	attempts := 5
+	if runtime.GOOS == "windows" {
+		attempts = 50
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		data, err := os.ReadFile(path)
-		if err == nil || os.IsNotExist(err) || attempt == 4 {
+		if err == nil || os.IsNotExist(err) || attempt == attempts-1 {
 			return data, err
 		}
-		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	panic("unreachable")
 }
@@ -382,10 +387,27 @@ func (s *Service) writeManifest(item Task) error {
 	if err := temporaryFile.Close(); err != nil {
 		return fmt.Errorf("close task manifest: %w", err)
 	}
-	if err := os.Rename(temporary, path); err != nil {
+	if err := replaceManifest(temporary, path); err != nil {
 		return fmt.Errorf("replace task manifest: %w", err)
 	}
 	return nil
+}
+
+func replaceManifest(temporary, path string) error {
+	attempts := 1
+	if runtime.GOOS == "windows" {
+		attempts = 50
+	}
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err = os.Rename(temporary, path); err == nil {
+			return nil
+		}
+		if attempt+1 < attempts {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	return err
 }
 
 func writeImportRequest(path string, request ImportRequest) error {

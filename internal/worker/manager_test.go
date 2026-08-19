@@ -30,7 +30,9 @@ func TestMain(m *testing.M) {
 			_ = WriteResult(taskDir, Result{RunID: runID, Mode: Mode(mode), Status: "cancelled", ErrorCode: "TASK_CANCELLED", ExitCode: 1, CompletedAt: time.Now().UTC()})
 			os.Exit(1)
 		case "hang":
-			select {}
+			for {
+				time.Sleep(time.Hour)
+			}
 		default:
 			os.Exit(23)
 		}
@@ -122,6 +124,30 @@ func TestManagerCancelClosesControlPipe(t *testing.T) {
 	got := waitForTask(t, manifests, item.ID, task.StatusCancelled)
 	if got.Status != task.StatusCancelled {
 		t.Fatalf("task=%+v", got)
+	}
+}
+
+func TestManagerCancelKillsUnresponsiveWorker(t *testing.T) {
+	setHelperMode(t, "hang")
+	root := t.TempDir()
+	manifests, item := managerTask(t, root)
+	manager := newTestManager(t, root, manifests)
+	if _, err := manager.Start(context.Background(), Request{TaskID: item.ID, Mode: ModeAnalysis}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if !manager.Running(item.ID) {
+		t.Fatal("unresponsive worker exited before cancellation")
+	}
+	if err := manager.Cancel(item.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := waitForTask(t, manifests, item.ID, task.StatusCancelled)
+	if got.ErrorCode != "TASK_CANCELLED" {
+		t.Fatalf("task=%+v", got)
+	}
+	if manager.Running(item.ID) {
+		t.Fatal("worker remains after cancellation fallback")
 	}
 }
 
