@@ -112,6 +112,35 @@ func TestMaterializeKubernetesRebuildsTaskRows(t *testing.T) {
 	}
 }
 
+func TestMaterializeKubernetesReportsObjectAndDiffProgress(t *testing.T) {
+	db, err := storage.Open(filepath.Join(t.TempDir(), "task.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := storage.NewMVCCRepository(db, "t1").StoreRecords(context.Background(), kubernetesAggregateFixture()); err != nil {
+		t.Fatal(err)
+	}
+	var stages []string
+	if err := MaterializeKubernetes(context.Background(), db, "t1", 2, func(stage string, processed, total int64) {
+		stages = append(stages, stage)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	objectIndex, diffIndex := -1, -1
+	for index, stage := range stages {
+		if stage == "kubernetes-object-aggregate" && objectIndex < 0 {
+			objectIndex = index
+		}
+		if stage == "kubernetes-diff-aggregate" && diffIndex < 0 {
+			diffIndex = index
+		}
+	}
+	if objectIndex < 0 || diffIndex < 0 || objectIndex >= diffIndex {
+		t.Fatalf("stages=%v", stages)
+	}
+}
+
 func kubernetesAggregateFixture() []mvcc.Record {
 	return []mvcc.Record{
 		semanticRecord("pod", "/registry/pods/default/p", 1, 100, false,

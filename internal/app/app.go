@@ -194,8 +194,33 @@ func MVCCStage(manifests *task.Service, workers, channelSize, batchSize int) tas
 		}
 		defer db.Close()
 		repository := storage.NewMVCCRepository(db, taskContext.Task.ID)
-		stats, err := mvcc.NewPipeline(workers, channelSize, batchSize).Run(
-			ctx, sourcePath, taskContext.Task.EtcdVersion, taskContext.Task.EtcdVersionSource, repository)
+		var progressErr error
+		reportPipeline := func(update mvcc.Progress) {
+			if progressErr != nil {
+				return
+			}
+			stage := update.Stage
+			if stage == "" {
+				stage = "mvcc-scan"
+			}
+			processed, total := update.Scanned, update.Total
+			stageProgress := float64(0)
+			if stage == "mvcc-write" {
+				processed, total = update.Written, update.Decoded
+			}
+			if total > 0 {
+				stageProgress = float64(processed) / float64(total)
+			}
+			if err := taskContext.Report(ctx, task.ProgressUpdate{
+				Stage: stage, StageProgress: stageProgress,
+				Processed: processed, Total: total, Unit: "revisions",
+				Terminal: total > 0 && processed >= total,
+			}); err != nil {
+				progressErr = err
+			}
+		}
+		stats, err := mvcc.NewPipeline(workers, channelSize, batchSize).RunWithProgress(
+			ctx, sourcePath, taskContext.Task.EtcdVersion, taskContext.Task.EtcdVersionSource, repository, reportPipeline)
 		if errors.Is(err, mvcc.ErrSemanticUnavailable) {
 			if resetErr := repository.ResetMVCC(ctx); resetErr != nil {
 				return resetErr
@@ -208,11 +233,35 @@ func MVCCStage(manifests *task.Service, workers, channelSize, batchSize int) tas
 		if err != nil {
 			return apperr.E("MVCC_DECODE_FAILED", "MVCC analysis failed", err)
 		}
-		if err := analyzer.Materialize(ctx, db, taskContext.Task.ID, batchSize); err != nil {
+		if progressErr != nil {
+			return progressErr
+		}
+		reportAggregate := func(stage string, processed, total int64) {
+			if progressErr != nil {
+				return
+			}
+			stageProgress := float64(0)
+			if total > 0 {
+				stageProgress = float64(processed) / float64(total)
+			}
+			if err := taskContext.Report(ctx, task.ProgressUpdate{
+				Stage: stage, StageProgress: stageProgress, Processed: processed, Total: total, Unit: "items",
+				Terminal: total > 0 && processed >= total,
+			}); err != nil {
+				progressErr = err
+			}
+		}
+		if err := analyzer.Materialize(ctx, db, taskContext.Task.ID, batchSize, reportAggregate); err != nil {
 			return err
 		}
-		if err := analyzer.MaterializeKubernetes(ctx, db, taskContext.Task.ID, batchSize); err != nil {
+		if progressErr != nil {
+			return progressErr
+		}
+		if err := analyzer.MaterializeKubernetes(ctx, db, taskContext.Task.ID, batchSize, reportAggregate); err != nil {
 			return err
+		}
+		if progressErr != nil {
+			return progressErr
 		}
 		return repository.SaveScanStats(ctx, stats)
 	}}

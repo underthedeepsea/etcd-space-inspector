@@ -10,9 +10,18 @@ import (
 )
 
 // MaterializeKubernetes rebuilds Value-free Kubernetes object and task aggregates.
-func MaterializeKubernetes(ctx context.Context, db *sql.DB, taskID string, batchSize int) error {
+func MaterializeKubernetes(ctx context.Context, db *sql.DB, taskID string, batchSize int, callbacks ...ProgressFunc) error {
 	if batchSize < 1 {
 		batchSize = 1000
+	}
+	progress := firstProgressCallback(callbacks)
+	objectTotal, err := countDistinctTaskRows(ctx, db, "kube_revision_records", taskID)
+	if err != nil {
+		return fmt.Errorf("count Kubernetes objects: %w", err)
+	}
+	diffTotal, err := countTaskRows(ctx, db, "kube_revision_records", taskID)
+	if err != nil {
+		return fmt.Errorf("count Kubernetes revisions: %w", err)
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -30,7 +39,8 @@ func MaterializeKubernetes(ctx context.Context, db *sql.DB, taskID string, batch
 	if _, err := tx.ExecContext(ctx, kubeObjectAggregationSQL, taskID, taskID, taskID, taskID, taskID); err != nil {
 		return fmt.Errorf("materialize Kubernetes objects: %w", err)
 	}
-	if err := materializeKubernetesDiffs(ctx, tx, taskID, batchSize); err != nil {
+	diffProcessed, err := materializeKubernetesDiffs(ctx, tx, taskID, batchSize)
+	if err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, kubeResourceAggregationSQL, taskID, taskID); err != nil {
@@ -44,6 +54,12 @@ func MaterializeKubernetes(ctx context.Context, db *sql.DB, taskID string, batch
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit Kubernetes aggregation: %w", err)
+	}
+	if progress != nil {
+		progress("kubernetes-object-aggregate", 0, objectTotal)
+		progress("kubernetes-object-aggregate", objectTotal, objectTotal)
+		progress("kubernetes-diff-aggregate", 0, diffTotal)
+		progress("kubernetes-diff-aggregate", diffProcessed, diffTotal)
 	}
 	return nil
 }
@@ -124,41 +140,45 @@ type kubeRevisionRef struct {
 	subRevision  int64
 }
 
-func materializeKubernetesDiffs(ctx context.Context, tx *sql.Tx, taskID string, batchSize int) error {
+func materializeKubernetesDiffs(ctx context.Context, tx *sql.Tx, taskID string, batchSize int) (int64, error) {
 	lastKey := ""
+	processed := int64(0)
 	for {
 		rows, err := tx.QueryContext(ctx, `
 SELECT DISTINCT key_hash FROM kube_revision_records
 WHERE task_id = ? AND key_hash > ? ORDER BY key_hash LIMIT ?`, taskID, lastKey, batchSize)
 		if err != nil {
-			return fmt.Errorf("select Kubernetes diff keys: %w", err)
+			return processed, fmt.Errorf("select Kubernetes diff keys: %w", err)
 		}
 		keys := make([]string, 0, batchSize)
 		for rows.Next() {
 			var key string
 			if err := rows.Scan(&key); err != nil {
 				rows.Close()
-				return fmt.Errorf("scan Kubernetes diff key: %w", err)
+				return processed, fmt.Errorf("scan Kubernetes diff key: %w", err)
 			}
 			keys = append(keys, key)
 			lastKey = key
 		}
 		if err := rows.Close(); err != nil {
-			return fmt.Errorf("close Kubernetes diff keys: %w", err)
+			return processed, fmt.Errorf("close Kubernetes diff keys: %w", err)
 		}
 		if len(keys) == 0 {
-			return nil
+			return processed, nil
 		}
 		for _, key := range keys {
-			if err := materializeKubernetesKeyDiffs(ctx, tx, taskID, key, batchSize); err != nil {
-				return err
+			keyProcessed, err := materializeKubernetesKeyDiffs(ctx, tx, taskID, key, batchSize)
+			if err != nil {
+				return processed, err
 			}
+			processed += keyProcessed
 		}
 	}
 }
 
-func materializeKubernetesKeyDiffs(ctx context.Context, tx *sql.Tx, taskID, keyHash string, batchSize int) error {
+func materializeKubernetesKeyDiffs(ctx context.Context, tx *sql.Tx, taskID, keyHash string, batchSize int) (int64, error) {
 	lastMain, lastSub := int64(0), int64(-1)
+	processed := int64(0)
 	var previousRef kubeRevisionRef
 	hasPrevious := false
 	var previousFields []kube.FieldStat
@@ -169,33 +189,33 @@ WHERE task_id = ? AND key_hash = ?
   AND (main_revision > ? OR (main_revision = ? AND sub_revision > ?))
 ORDER BY main_revision, sub_revision LIMIT ?`, taskID, keyHash, lastMain, lastMain, lastSub, batchSize)
 		if err != nil {
-			return fmt.Errorf("select Kubernetes revisions: %w", err)
+			return processed, fmt.Errorf("select Kubernetes revisions: %w", err)
 		}
 		revisions := make([]kubeRevisionRef, 0, batchSize)
 		for rows.Next() {
 			var revision kubeRevisionRef
 			if err := rows.Scan(&revision.id, &revision.mainRevision, &revision.subRevision); err != nil {
 				rows.Close()
-				return fmt.Errorf("scan Kubernetes revision: %w", err)
+				return processed, fmt.Errorf("scan Kubernetes revision: %w", err)
 			}
 			revisions = append(revisions, revision)
 		}
 		if err := rows.Close(); err != nil {
-			return fmt.Errorf("close Kubernetes revisions: %w", err)
+			return processed, fmt.Errorf("close Kubernetes revisions: %w", err)
 		}
 		if len(revisions) == 0 {
-			return nil
+			return processed, nil
 		}
 		for index := range revisions {
 			currentRef := revisions[index]
 			currentFields, err := loadKubernetesFields(ctx, tx, currentRef.id)
 			if err != nil {
-				return err
+				return processed, err
 			}
 			if hasPrevious {
 				diff := kube.CompareFields(previousFields, currentFields)
 				if err := insertKubernetesDiff(ctx, tx, taskID, keyHash, previousRef, currentRef, diff); err != nil {
-					return err
+					return processed, err
 				}
 			}
 			previousRef = currentRef
@@ -203,10 +223,19 @@ ORDER BY main_revision, sub_revision LIMIT ?`, taskID, keyHash, lastMain, lastMa
 			previousFields = currentFields
 			lastMain, lastSub = currentRef.mainRevision, currentRef.subRevision
 		}
+		processed += int64(len(revisions))
 		if len(revisions) < batchSize {
-			return nil
+			return processed, nil
 		}
 	}
+}
+
+func countDistinctTaskRows(ctx context.Context, db *sql.DB, table, taskID string) (int64, error) {
+	var count int64
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT key_hash) FROM "+table+" WHERE task_id = ?", taskID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func loadKubernetesFields(ctx context.Context, tx *sql.Tx, revisionID int64) ([]kube.FieldStat, error) {
