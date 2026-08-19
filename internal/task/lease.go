@@ -37,6 +37,18 @@ func AcquireLease(path string, record LeaseRecord, staleAfter time.Duration) (*L
 	return acquireLeaseAt(path, record, time.Now().UTC(), staleAfter)
 }
 
+// LeaseStale reports whether a lock is absent, unreadable, or past its heartbeat deadline.
+func LeaseStale(path string, now time.Time, staleAfter time.Duration) (bool, error) {
+	record, err := readLeaseFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	return staleAfter <= 0 || now.Sub(record.HeartbeatAt) >= staleAfter, nil
+}
+
 func acquireLeaseAt(path string, record LeaseRecord, now time.Time, staleAfter time.Duration) (*Lease, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create lease directory: %w", err)

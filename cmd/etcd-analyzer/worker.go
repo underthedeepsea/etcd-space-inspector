@@ -17,14 +17,14 @@ import (
 )
 
 var (
-	workerStdin   io.Reader = os.Stdin
-	workerDataDir string
+	workerStdin        io.Reader = os.Stdin
+	workerDataDir      string
 	workerRunOperation = func(ctx context.Context, request worker.Request) error {
 		manifests := task.NewService(workerDataDir)
 		if request.Mode == worker.ModeImport {
 			return app.RunImportWorker(ctx, manifests, request)
 		}
-		return fmt.Errorf("analysis worker is not configured")
+		return app.RunAnalysisWorker(ctx, manifests, request)
 	}
 )
 
@@ -73,8 +73,9 @@ func runWorker(args []string, stdout, stderr io.Writer) (exitCode int) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	stdin := workerStdin
 	go func() {
-		_, _ = io.Copy(io.Discard, workerStdin)
+		_, _ = io.Copy(io.Discard, stdin)
 		cancel()
 	}()
 	if err := workerRunOperation(ctx, request); err != nil {

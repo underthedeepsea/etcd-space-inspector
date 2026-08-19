@@ -19,17 +19,29 @@ import (
 	"etcd-analyzer/internal/report"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
+	"etcd-analyzer/internal/worker"
 )
 
 // Application coordinates local task operations.
 type Application struct {
-	manifests     *task.Service
-	diffs         *domain.Service
-	stages        []task.Stage
-	diffBatchSize int
-	mu            sync.Mutex
-	running       map[string]runHandle
-	runningDiffs  map[string]runHandle
+	manifests       *task.Service
+	diffs           *domain.Service
+	stages          []task.Stage
+	diffBatchSize   int
+	mu              sync.Mutex
+	running         map[string]runHandle
+	runningDiffs    map[string]runHandle
+	workerManager   workerSupervisor
+	workerCount     int
+	channelSize     int
+	sqliteBatchSize int
+}
+
+type workerSupervisor interface {
+	Start(context.Context, worker.Request) (task.Task, error)
+	Cancel(string) error
+	Shutdown(context.Context) error
+	Running(string) bool
 }
 
 type runHandle struct {
@@ -41,7 +53,8 @@ type runHandle struct {
 func New(dataDir string, stages []task.Stage) *Application {
 	return &Application{
 		manifests: task.NewService(dataDir), diffs: domain.NewService(dataDir), stages: stages,
-		diffBatchSize: 500, running: make(map[string]runHandle), runningDiffs: make(map[string]runHandle),
+		diffBatchSize: 500, workerCount: 1, channelSize: 128, sqliteBatchSize: 500,
+		running: make(map[string]runHandle), runningDiffs: make(map[string]runHandle),
 	}
 }
 
@@ -56,12 +69,22 @@ func NewM2(dataDir string, batchSize int) *Application {
 func NewM4(dataDir string, batchSize, workers, channelSize int) *Application {
 	application := New(dataDir, nil)
 	application.diffBatchSize = batchSize
+	application.sqliteBatchSize = batchSize
+	application.workerCount = workers
+	application.channelSize = channelSize
 	application.stages = []task.Stage{
 		PhysicalStage(application.manifests, batchSize),
 		MVCCStage(application.manifests, workers, channelSize, batchSize),
 		ReportStage(application.manifests),
 	}
 	return application
+}
+
+// UseWorkerManager installs the isolated worker supervisor for snapshot/raw-db tasks.
+func (a *Application) UseWorkerManager(manager *worker.Manager) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.workerManager = manager
 }
 
 // NewM5 creates an application with persistent two-task Snapshot comparison.
@@ -164,6 +187,19 @@ func MVCCStage(manifests *task.Service, workers, channelSize, batchSize int) tas
 
 // Create imports an input and initializes its SQLite task row.
 func (a *Application) Create(ctx context.Context, request task.CreateRequest) (task.Task, error) {
+	a.mu.Lock()
+	manager := a.workerManager
+	a.mu.Unlock()
+	if manager != nil && isManagedInput(request.InputType) {
+		item, err := a.manifests.PrepareImport(ctx, request)
+		if err != nil {
+			return task.Task{}, err
+		}
+		if _, err := manager.Start(ctx, worker.Request{TaskID: item.ID, Mode: worker.ModeImport}); err != nil {
+			return task.Task{}, err
+		}
+		return item, nil
+	}
 	item, err := a.manifests.Create(ctx, request)
 	if err != nil {
 		return task.Task{}, err
@@ -219,6 +255,16 @@ func (a *Application) Start(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	a.mu.Lock()
+	manager := a.workerManager
+	a.mu.Unlock()
+	if manager != nil && isManagedInput(item.InputType) {
+		_, err := manager.Start(ctx, worker.Request{
+			TaskID: id, Mode: worker.ModeAnalysis, WorkerCount: a.workerCount,
+			ChannelSize: a.channelSize, SQLiteBatchSize: a.sqliteBatchSize,
+		})
+		return err
+	}
 	db, err := storage.Open(a.databasePath(id))
 	if err != nil {
 		return err
@@ -264,6 +310,15 @@ func (a *Application) stagesFor(item task.Task) []task.Stage {
 // Cancel signals a running task.
 func (a *Application) Cancel(id string) error {
 	a.mu.Lock()
+	manager := a.workerManager
+	a.mu.Unlock()
+	if manager != nil {
+		item, err := a.manifests.Get(id)
+		if err == nil && isManagedInput(item.InputType) {
+			return manager.Cancel(id)
+		}
+	}
+	a.mu.Lock()
 	handle, exists := a.running[id]
 	a.mu.Unlock()
 	if !exists {
@@ -275,6 +330,17 @@ func (a *Application) Cancel(id string) error {
 
 // Delete removes a task that is not running.
 func (a *Application) Delete(id string) error {
+	a.mu.Lock()
+	manager := a.workerManager
+	a.mu.Unlock()
+	if manager != nil {
+		item, err := a.manifests.Get(id)
+		if err == nil && isManagedInput(item.InputType) && manager.Running(id) {
+			if item.Status == task.StatusRunning || item.Status == task.StatusImporting || item.Status == task.StatusPending {
+				return fmt.Errorf("task %s is running", id)
+			}
+		}
+	}
 	a.mu.Lock()
 	handle, running := a.running[id]
 	a.mu.Unlock()
@@ -291,62 +357,43 @@ func (a *Application) Delete(id string) error {
 	return a.manifests.Delete(id)
 }
 
-// RecoverInterrupted marks tasks left running by a previous process as failed.
-func (a *Application) RecoverInterrupted(ctx context.Context) error {
-	items, err := a.List(ctx)
-	if err != nil {
-		return err
+// Shutdown stops isolated and in-process workers before the application exits.
+func (a *Application) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	for _, item := range items {
-		db, err := storage.Open(a.databasePath(item.ID))
-		if err != nil {
+	a.mu.Lock()
+	manager := a.workerManager
+	handles := make([]runHandle, 0, len(a.running))
+	for _, handle := range a.running {
+		handles = append(handles, handle)
+	}
+	a.mu.Unlock()
+	if manager != nil {
+		if err := manager.Shutdown(ctx); err != nil {
 			return err
 		}
-		if item.InputType != "log" && item.InputType != "audit" && item.InputType != "metrics" {
-			if err := storage.NewKubeRepository(db, item.ID).EnsureUnavailable(ctx); err != nil {
-				db.Close()
-				return err
-			}
-		}
-		if item.Status != task.StatusRunning {
-			if err := db.Close(); err != nil {
-				return fmt.Errorf("close migrated task database: %w", err)
-			}
-			continue
-		}
-		now := time.Now().UTC()
-		item.Status = task.StatusFailed
-		item.ErrorCode = "TASK_INTERRUPTED"
-		item.ErrorMessage = "analysis process stopped before completion"
-		item.CompletedAt = &now
-		repository := &repository{database: storage.NewRepository(db), manifests: a.manifests}
-		updateErr := repository.UpdateTask(ctx, item)
-		closeErr := db.Close()
-		if updateErr != nil {
-			return updateErr
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close recovered task database: %w", closeErr)
-		}
 	}
-	diffs, err := a.diffs.List()
-	if err != nil {
-		return err
+	for _, handle := range handles {
+		handle.cancel()
 	}
-	for _, item := range diffs {
-		if item.Status != domain.StatusPending && item.Status != domain.StatusRunning {
-			continue
-		}
-		now := time.Now().UTC()
-		item.Status = domain.StatusFailed
-		item.ErrorCode = "DIFF_INTERRUPTED"
-		item.ErrorMessage = "comparison process stopped before completion"
-		item.CompletedAt = &now
-		if err := a.diffs.Save(item); err != nil {
-			return err
+	for _, handle := range handles {
+		select {
+		case <-handle.done:
+		case <-ctx.Done():
+			return nil
 		}
 	}
 	return nil
+}
+
+func isManagedInput(inputType string) bool {
+	return inputType == "snapshot" || inputType == "raw-db"
+}
+
+// RecoverInterrupted marks tasks left running by a previous process as failed.
+func (a *Application) RecoverInterrupted(ctx context.Context) error {
+	return a.recoverTasks(ctx)
 }
 
 // Summary returns M2 physical space composition.

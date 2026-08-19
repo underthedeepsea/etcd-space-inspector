@@ -42,6 +42,17 @@ func TestRunnerCompletesEmptyPipeline(t *testing.T) {
 	}
 }
 
+func TestRunnerAcceptsPreclaimedRunningTask(t *testing.T) {
+	repo := newFakeRunnerRepository(Task{ID: "t1", Status: StatusRunning, CreatedAt: time.Now().UTC()})
+	if err := NewRunner(repo, nil).Start(context.Background(), "t1"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := repo.GetTask(context.Background(), "t1")
+	if got.Status != StatusCompleted || got.CompletedAt == nil {
+		t.Fatalf("task=%+v", got)
+	}
+}
+
 type fakeRunnerRepository struct {
 	mu   sync.Mutex
 	task Task

@@ -63,14 +63,16 @@ func (r *Runner) Start(parent context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := ValidateTransition(item.Status, StatusRunning); err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	item.Status = StatusRunning
-	item.StartedAt = &now
-	if err := r.repository.UpdateTask(ctx, item); err != nil {
-		return err
+	if item.Status != StatusRunning {
+		if err := ValidateTransition(item.Status, StatusRunning); err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		item.Status = StatusRunning
+		item.StartedAt = &now
+		if err := r.repository.UpdateTask(ctx, item); err != nil {
+			return err
+		}
 	}
 
 	for index, stage := range r.stages {

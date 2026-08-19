@@ -87,6 +87,32 @@ func TestRunServerStopsWithContext(t *testing.T) {
 	}
 }
 
+func TestRunServerPersistsAndReleasesRuntimeState(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	stdout := &listeningWriter{ready: make(chan struct{})}
+	var stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- runServer(ctx, []string{"--data-dir", root, "--listen", "127.0.0.1:0"}, stdout, &stderr)
+	}()
+	select {
+	case <-stdout.ready:
+	case code := <-done:
+		t.Fatalf("server exited before listening: code=%d stderr=%q", code, stderr.String())
+	}
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "logs", "server.log")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "runtime", "server.lock")); !os.IsNotExist(err) {
+		t.Fatalf("server lock remains: %v", err)
+	}
+}
+
 type listeningWriter struct {
 	bytes.Buffer
 	once  sync.Once

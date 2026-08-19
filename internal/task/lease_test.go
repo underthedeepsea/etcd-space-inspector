@@ -112,3 +112,21 @@ func TestServiceLeasePaths(t *testing.T) {
 		t.Fatalf("task lease path=%q, want %q", got, want)
 	}
 }
+
+func TestLeaseStaleReportsExpiredAndMissingLocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.lock")
+	now := time.Now().UTC()
+	stale, err := LeaseStale(path, now, 15*time.Second)
+	if err != nil || !stale {
+		t.Fatalf("missing stale=%v err=%v", stale, err)
+	}
+	lease, err := acquireLeaseAt(path, LeaseRecord{OwnerID: "owner", RunID: "run"}, now.Add(-16*time.Second), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	stale, err = LeaseStale(path, now, 15*time.Second)
+	if err != nil || !stale {
+		t.Fatalf("expired stale=%v err=%v", stale, err)
+	}
+}

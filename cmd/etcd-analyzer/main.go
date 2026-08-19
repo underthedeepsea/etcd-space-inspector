@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,9 +18,11 @@ import (
 	"etcd-analyzer/internal/app"
 	"etcd-analyzer/internal/config"
 	domain "etcd-analyzer/internal/diff"
+	"etcd-analyzer/internal/runlog"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
 	"etcd-analyzer/internal/version"
+	"etcd-analyzer/internal/worker"
 	"etcd-analyzer/web"
 )
 
@@ -175,6 +178,55 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 
 	application := app.NewM5(settings.Server.DataDir, settings.Analysis.SQLiteBatchSize,
 		settings.Analysis.WorkerCount, settings.Analysis.ChannelSize)
+	serverLog, err := runlog.OpenServer(settings.Server.DataDir, 10<<20, 3, stdout)
+	if err != nil {
+		fmt.Fprintf(stderr, "open server log: %v\n", err)
+		return 1
+	}
+	ownerID := fmt.Sprintf("server-%d", os.Getpid())
+	manifests := task.NewService(settings.Server.DataDir)
+	serverLease, err := task.AcquireLease(manifests.ServerLeasePath(), task.LeaseRecord{
+		OwnerID: ownerID, PID: os.Getpid(), Mode: "server", StartedAt: time.Now().UTC(), HeartbeatAt: time.Now().UTC(),
+	}, 15*time.Second)
+	if err != nil {
+		_ = serverLog.Close()
+		fmt.Fprintln(stderr, "data directory is already in use")
+		return 1
+	}
+	manager, err := worker.NewManager(worker.ManagerConfig{
+		Executable: executablePath(), DataDir: settings.Server.DataDir, OwnerID: ownerID,
+		HeartbeatEvery: 2 * time.Second, StaleAfter: 15 * time.Second, ShutdownTimeout: 10 * time.Second,
+		MaxImports: 1, MaxAnalyses: 1, ServerLog: serverLog,
+	}, manifests)
+	if err != nil {
+		_ = serverLease.Release()
+		_ = serverLog.Close()
+		fmt.Fprintf(stderr, "create worker manager: %v\n", err)
+		return 1
+	}
+	application.UseWorkerManager(manager)
+	heartbeatStop := make(chan struct{})
+	heartbeatDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		defer close(heartbeatDone)
+		for {
+			select {
+			case <-ticker.C:
+				_ = serverLease.Heartbeat()
+			case <-heartbeatStop:
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(heartbeatStop)
+		<-heartbeatDone
+		_ = application.Shutdown(context.Background())
+		_ = serverLease.Release()
+		_ = serverLog.Close()
+	}()
 	if err := application.RecoverInterrupted(ctx); err != nil {
 		fmt.Fprintf(stderr, "recover interrupted tasks: %v\n", err)
 		return 1
@@ -219,6 +271,14 @@ func runServer(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 }
 
+func executablePath() string {
+	path, err := os.Executable()
+	if err != nil {
+		return os.Args[0]
+	}
+	return path
+}
+
 func loopbackAddress(address string) bool {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
@@ -232,6 +292,9 @@ func loopbackAddress(address string) bool {
 }
 
 func runAnalyze(args []string, stdout, stderr io.Writer) int {
+	if !isTestExecutable() {
+		return runManagedAnalyze(args, stdout, stderr)
+	}
 	flags := flag.NewFlagSet("analyze", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	input := flags.String("input", "", "snapshot, raw database, log, Audit, or Prometheus metrics path")
@@ -310,6 +373,99 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "%s %s\n", completed.ID, completed.Status)
 	return 0
+}
+
+func runManagedAnalyze(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("analyze", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	input := flags.String("input", "", "snapshot, raw database, log, Audit, or Prometheus metrics path")
+	inputType := flags.String("type", "snapshot", "snapshot, raw-db, log, audit, or metrics")
+	output := flags.String("output", "./analysis-data", "analysis data directory")
+	etcdVersion := flags.String("etcd-version", "", "source etcd version")
+	name := flags.String("name", "", "task name")
+	maxInputBytes := flags.Int64("max-input-bytes", 50<<30, "maximum input bytes")
+	if err := flags.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if *input == "" {
+		fmt.Fprintln(stderr, "--input is required")
+		return 2
+	}
+	if *name == "" {
+		*name = filepath.Base(*input)
+	}
+	settings, err := config.Load("")
+	if err != nil {
+		fmt.Fprintf(stderr, "load defaults: %v\n", err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	application := app.NewM5(*output, settings.Analysis.SQLiteBatchSize, settings.Analysis.WorkerCount, settings.Analysis.ChannelSize)
+	serverLog, err := runlog.OpenServer(*output, 10<<20, 3, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "open server log: %v\n", err)
+		return 1
+	}
+	defer serverLog.Close()
+	manager, err := worker.NewManager(worker.ManagerConfig{
+		Executable: executablePath(), DataDir: *output, OwnerID: fmt.Sprintf("cli-%d", os.Getpid()),
+		HeartbeatEvery: 2 * time.Second, StaleAfter: 15 * time.Second, ShutdownTimeout: 10 * time.Second,
+		MaxImports: 1, MaxAnalyses: 1, ServerLog: serverLog,
+	}, task.NewService(*output))
+	if err != nil {
+		fmt.Fprintf(stderr, "create worker manager: %v\n", err)
+		return 1
+	}
+	application.UseWorkerManager(manager)
+	defer application.Shutdown(context.Background())
+	created, err := application.Create(ctx, task.CreateRequest{
+		Name: *name, SourcePath: *input, InputType: *inputType, EtcdVersion: *etcdVersion, MaxInputBytes: *maxInputBytes,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "create task: %v\n", err)
+		return 1
+	}
+	started := false
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		item, err := application.Get(context.Background(), created.ID)
+		if err != nil {
+			fmt.Fprintf(stderr, "read task: %v\n", err)
+			return 1
+		}
+		switch item.Status {
+		case task.StatusPending:
+			if !started {
+				if err := application.Start(ctx, item.ID); err != nil {
+					fmt.Fprintf(stderr, "start task: %v\n", err)
+					return 1
+				}
+				started = true
+			}
+		case task.StatusCompleted:
+			fmt.Fprintf(stdout, "%s %s\n", item.ID, item.Status)
+			return 0
+		case task.StatusFailed, task.StatusCancelled:
+			fmt.Fprintf(stderr, "%s %s: %s\n", item.ID, item.Status, item.ErrorMessage)
+			return 1
+		}
+		select {
+		case <-ctx.Done():
+			_ = application.Cancel(created.ID)
+			fmt.Fprintln(stderr, "task cancelled")
+			return 1
+		case <-ticker.C:
+		}
+	}
+}
+
+func isTestExecutable() bool {
+	return strings.HasSuffix(filepath.Base(os.Args[0]), ".test")
 }
 
 func runReport(args []string, stdout, stderr io.Writer) int {
