@@ -51,6 +51,37 @@ func TestAnalyzeRejectsCorruptedFile(t *testing.T) {
 	}
 }
 
+func TestAnalyzeReportsPhysicalStages(t *testing.T) {
+	path := createFixtureDB(t)
+	var stages []string
+	_, err := New(2).RunWithProgress(context.Background(), path, &memorySink{}, func(stage string, processed, total int64) error {
+		stages = append(stages, stage)
+		if stage == "physical-integrity-check" && (processed != 0 || total != 0) {
+			t.Fatalf("integrity progress=%d/%d", processed, total)
+		}
+		if stage == "physical-page-scan" && total == 0 {
+			t.Fatal("page scan total is unknown")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"physical-open", "physical-integrity-check", "physical-page-scan"}
+	for _, name := range want {
+		found := false
+		for _, stage := range stages {
+			if stage == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("stage %q missing from %v", name, stages)
+		}
+	}
+}
+
 func createFixtureDB(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fixture.db")

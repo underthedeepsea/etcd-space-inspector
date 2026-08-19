@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -99,7 +100,10 @@ func NewM3(dataDir string, batchSize, workers, channelSize int) *Application {
 
 // ReportStage writes the private standalone HTML summary after analysis.
 func ReportStage(manifests *task.Service) task.Stage {
-	return task.Stage{Name: "html-report", Run: func(ctx context.Context, taskContext *task.Context) error {
+	return task.Stage{Name: "report-generate", Run: func(ctx context.Context, taskContext *task.Context) error {
+		if err := taskContext.Report(ctx, task.ProgressUpdate{Stage: "report-generate"}); err != nil {
+			return err
+		}
 		taskDir := manifests.TaskDir(taskContext.Task.ID)
 		db, err := storage.OpenReadOnly(filepath.Join(taskDir, "task.db"))
 		if err != nil {
@@ -110,7 +114,22 @@ func ReportStage(manifests *task.Service) task.Stage {
 		if err != nil {
 			return err
 		}
-		return report.WriteFile(ctx, filepath.Join(taskDir, "exports", "report.html"), summary)
+		outputPath := filepath.Join(taskDir, "exports", "report.html")
+		if err := report.WriteFile(ctx, outputPath, summary); err != nil {
+			return err
+		}
+		processed := int64(0)
+		if info, err := os.Stat(outputPath); err == nil {
+			processed = info.Size()
+		}
+		return taskContext.Report(ctx, task.ProgressUpdate{
+			Stage:         "report-generate",
+			StageProgress: 1,
+			Processed:     processed,
+			Total:         processed,
+			Unit:          "bytes",
+			Terminal:      true,
+		})
 	}}
 }
 
@@ -132,7 +151,21 @@ func PhysicalStage(manifests *task.Service, batchSize int) task.Stage {
 		if err := repository.Reset(ctx); err != nil {
 			return err
 		}
-		summary, err := backend.New(batchSize).Run(ctx, sourcePath, repository)
+		summary, err := backend.New(batchSize).RunWithProgress(ctx, sourcePath, repository, func(stage string, processed, total int64) error {
+			stageProgress := float64(0)
+			unit := ""
+			terminal := false
+			if stage == "physical-page-scan" {
+				unit = "pages"
+				if total > 0 {
+					stageProgress = float64(processed) / float64(total)
+					terminal = processed >= total
+				}
+			}
+			return taskContext.Report(ctx, task.ProgressUpdate{
+				Stage: stage, StageProgress: stageProgress, Processed: processed, Total: total, Unit: unit, Terminal: terminal,
+			})
+		})
 		if err != nil {
 			if errors.Is(err, backend.ErrOpenFailed) {
 				return apperr.E("BBOLT_OPEN_FAILED", "unable to open bbolt database", err)

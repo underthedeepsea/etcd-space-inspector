@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -30,6 +31,11 @@ func RunAnalysisWorker(ctx context.Context, manifests *task.Service, request wor
 		return err
 	}
 	defer database.Close()
+	taskDBPath := filepath.Join(manifests.TaskDir(item.ID), "task.db")
+	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
+	go writeAnalysisHeartbeats(heartbeatCtx, manifests, taskDBPath, item.ID, item.RunID)
+	defer stopHeartbeat()
+	writeAnalysisHeartbeat(taskDBPath, item.ID, item.RunID, item.CurrentStage)
 	store := storage.NewRepository(database)
 	if _, err := store.GetTask(ctx, item.ID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -87,14 +93,54 @@ func (r *workerRepository) UpdateTask(ctx context.Context, item task.Task) error
 		if err := r.database.UpdateTask(ctx, item); err != nil {
 			return err
 		}
-		return r.manifests.SaveForRun(item, item.RunID)
+		if err := r.manifests.SaveForRun(item, item.RunID); err != nil {
+			return err
+		}
+		r.logHeartbeat(item)
+		return nil
 	}
 	if err := r.manifests.SaveForRun(item, item.RunID); err != nil {
 		return err
 	}
-	return r.database.UpdateTask(ctx, item)
+	if err := r.database.UpdateTask(ctx, item); err != nil {
+		return err
+	}
+	r.logHeartbeat(item)
+	return nil
 }
 
 func (r *workerRepository) SaveCheckpoint(ctx context.Context, id, stage string, completedAt time.Time) error {
 	return r.database.SaveCheckpoint(ctx, id, stage, completedAt)
+}
+
+func (r *workerRepository) logHeartbeat(item task.Task) {
+	if item.HeartbeatAt == nil || item.RunID == "" {
+		return
+	}
+	writeAnalysisHeartbeat(filepath.Join(r.manifests.TaskDir(item.ID), "task.db"), item.ID, item.RunID, item.CurrentStage)
+}
+
+func writeAnalysisHeartbeats(ctx context.Context, manifests *task.Service, taskDBPath, taskID, runID string) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			stage := "unknown"
+			if item, err := manifests.Get(taskID); err == nil && item.CurrentStage != "" {
+				stage = item.CurrentStage
+			}
+			writeAnalysisHeartbeat(taskDBPath, taskID, runID, stage)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func writeAnalysisHeartbeat(taskDBPath, taskID, runID, stage string) {
+	stats := task.CollectRuntimeStats(taskDBPath)
+	_, _ = fmt.Fprintf(os.Stdout,
+		"heartbeat task=%s run=%s stage=%s heap_alloc_bytes=%d heap_sys_bytes=%d gc_count=%d goroutines=%d task_db_bytes=%d wal_bytes=%d\n",
+		taskID, runID, stage, stats.HeapAlloc, stats.HeapSys, stats.NumGC, stats.Goroutines, stats.TaskDBBytes, stats.WALBytes,
+	)
 }

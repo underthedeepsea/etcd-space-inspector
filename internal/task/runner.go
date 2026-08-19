@@ -19,7 +19,16 @@ type RunnerRepository interface {
 
 // Context carries mutable task state to an analysis stage.
 type Context struct {
-	Task *Task
+	Task     *Task
+	Reporter Reporter
+}
+
+// Report forwards a progress sample when a reporter is installed.
+func (c *Context) Report(ctx context.Context, update ProgressUpdate) error {
+	if c == nil || c.Reporter == nil {
+		return nil
+	}
+	return c.Reporter.Report(ctx, update)
 }
 
 // Stage is one cancellable analysis operation.
@@ -74,14 +83,46 @@ func (r *Runner) Start(parent context.Context, id string) error {
 			return err
 		}
 	}
+	reporter := NewProgressReporter(func(reportCtx context.Context, update ProgressUpdate) error {
+		if update.Stage != "" {
+			item.CurrentStage = update.Stage
+		}
+		item.StageProgress = update.StageProgress
+		item.Processed = update.Processed
+		item.Total = update.Total
+		item.Unit = update.Unit
+		item.RatePerSecond = update.RatePerSecond
+		item.HeartbeatAt = update.HeartbeatAt
+		item.ElapsedSeconds = update.ElapsedSeconds
+		item.EstimatedRemainingSeconds = update.EstimatedRemainingSeconds
+		return r.repository.UpdateTask(reportCtx, item)
+	}, time.Now)
 
 	for index, stage := range r.stages {
 		item.CurrentStage = stage.Name
 		item.Progress = float64(index) / float64(len(r.stages))
+		item.StageProgress = 0
+		item.Processed = 0
+		item.Total = 0
+		item.Unit = ""
+		item.RatePerSecond = 0
+		item.HeartbeatAt = nil
+		item.ElapsedSeconds = 0
+		item.EstimatedRemainingSeconds = nil
 		if err := r.repository.UpdateTask(ctx, item); err != nil {
 			return r.fail(ctx, &item, err)
 		}
-		if err := stage.Run(ctx, &Context{Task: &item}); err != nil {
+		if err := stage.Run(ctx, &Context{Task: &item, Reporter: reporter}); err != nil {
+			return r.fail(ctx, &item, err)
+		}
+		if err := reporter.Report(ctx, ProgressUpdate{
+			Stage:         stage.Name,
+			StageProgress: 1,
+			Processed:     item.Processed,
+			Total:         item.Total,
+			Unit:          item.Unit,
+			Terminal:      true,
+		}); err != nil {
 			return r.fail(ctx, &item, err)
 		}
 		completedAt := time.Now().UTC()

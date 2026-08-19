@@ -34,6 +34,16 @@ func New(batchSize int) *Analyzer {
 
 // Run checks and scans a bbolt database without opening a write transaction.
 func (a *Analyzer) Run(ctx context.Context, sourcePath string, sink Sink) (Summary, error) {
+	return a.RunWithProgress(ctx, sourcePath, sink, nil)
+}
+
+// RunWithProgress checks and scans a bbolt database while reporting the
+// observable physical substages. processed/total are meaningful only for the
+// page scan; the open and integrity phases deliberately report 0/0.
+func (a *Analyzer) RunWithProgress(ctx context.Context, sourcePath string, sink Sink, progress func(stage string, processed, total int64) error) (Summary, error) {
+	if err := reportPhysicalProgress(ctx, progress, "physical-open", 0, 0); err != nil {
+		return Summary{}, err
+	}
 	info, err := os.Stat(sourcePath)
 	if err != nil {
 		return Summary{}, fmt.Errorf("stat bbolt input: %w", err)
@@ -50,6 +60,9 @@ func (a *Analyzer) Run(ctx context.Context, sourcePath string, sink Sink) (Summa
 	}
 	summary.PageCount = summary.PhysicalFileSize / summary.PageSize
 	err = db.View(func(tx *bolt.Tx) error {
+		if err := reportPhysicalProgress(ctx, progress, "physical-integrity-check", 0, 0); err != nil {
+			return err
+		}
 		var integrityErr error
 		for checkErr := range tx.Check() {
 			if integrityErr == nil {
@@ -62,7 +75,10 @@ func (a *Analyzer) Run(ctx context.Context, sourcePath string, sink Sink) (Summa
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := a.scanPages(ctx, tx, summary.PageCount, summary.PageSize, sink, &summary); err != nil {
+		if err := reportPhysicalProgress(ctx, progress, "physical-page-scan", 0, summary.PageCount); err != nil {
+			return err
+		}
+		if err := a.scanPages(ctx, tx, summary.PageCount, summary.PageSize, sink, &summary, progress); err != nil {
 			return err
 		}
 		return a.scanBuckets(ctx, tx, summary.PageSize, sink)
@@ -82,8 +98,9 @@ func (a *Analyzer) Run(ctx context.Context, sourcePath string, sink Sink) (Summa
 	return summary, nil
 }
 
-func (a *Analyzer) scanPages(ctx context.Context, tx *bolt.Tx, pageCount, pageSize int64, sink Sink, summary *Summary) error {
+func (a *Analyzer) scanPages(ctx context.Context, tx *bolt.Tx, pageCount, pageSize int64, sink Sink, summary *Summary, progress func(stage string, processed, total int64) error) error {
 	batch := make([]PageStat, 0, a.batchSize)
+	processed := int64(0)
 	for pageID := int64(0); pageID < pageCount; {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -114,16 +131,40 @@ func (a *Analyzer) scanPages(ctx context.Context, tx *bolt.Tx, pageCount, pageSi
 			if err := sink.StorePages(ctx, batch); err != nil {
 				return fmt.Errorf("store bbolt pages: %w", err)
 			}
+			if err := reportPhysicalProgress(ctx, progress, "physical-page-scan", minInt64(pageID+span, pageCount), pageCount); err != nil {
+				return err
+			}
 			batch = make([]PageStat, 0, a.batchSize)
 		}
 		pageID += span
+		processed = minInt64(pageID, pageCount)
 	}
 	if len(batch) > 0 {
 		if err := sink.StorePages(ctx, batch); err != nil {
 			return fmt.Errorf("store bbolt pages: %w", err)
 		}
+		if err := reportPhysicalProgress(ctx, progress, "physical-page-scan", processed, pageCount); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func reportPhysicalProgress(ctx context.Context, progress func(stage string, processed, total int64) error, stage string, processed, total int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if progress == nil {
+		return nil
+	}
+	return progress(stage, processed, total)
+}
+
+func minInt64(left, right int64) int64 {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func (a *Analyzer) scanBuckets(ctx context.Context, tx *bolt.Tx, pageSize int64, sink Sink) error {
