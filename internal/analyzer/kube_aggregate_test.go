@@ -3,12 +3,25 @@ package analyzer
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"etcd-analyzer/internal/kube"
 	"etcd-analyzer/internal/mvcc"
 	"etcd-analyzer/internal/storage"
 )
+
+func TestKubernetesDiffSourceIsOneOrderedJoin(t *testing.T) {
+	for _, fragment := range []string{
+		"FROM kube_revision_records revisions",
+		"LEFT JOIN kube_field_records fields",
+		"ORDER BY revisions.key_hash, revisions.main_revision, revisions.sub_revision, fields.path",
+	} {
+		if !strings.Contains(kubeDiffSourceSQL, fragment) {
+			t.Fatalf("diff source missing %q: %s", fragment, kubeDiffSourceSQL)
+		}
+	}
+}
 
 func TestMaterializeKubernetesBuildsObjectsDiffsAndTotals(t *testing.T) {
 	db, err := storage.Open(filepath.Join(t.TempDir(), "task.db"))

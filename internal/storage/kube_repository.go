@@ -398,7 +398,19 @@ ORDER BY current_main_revision DESC LIMIT ? OFFSET ?`, r.taskID, keyHash, limit,
 	return items, rows.Err()
 }
 
-func insertKubeRecord(ctx context.Context, tx *sql.Tx, taskID string, record *kube.ObjectRevision) error {
+const kubeRevisionInsertSQL = `
+INSERT INTO kube_revision_records (
+  task_id, key_hash, main_revision, sub_revision, storage_prefix, api_group, resource,
+  namespace, object_name, display_name, crd, cluster_scoped, sensitive, content_type,
+  decode_status, value_bytes
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+const kubeFieldInsertSQL = `
+INSERT INTO kube_field_records (
+  task_id, kube_revision_id, key_hash, main_revision, path, byte_size, type_class, field_hash
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+
+func insertKubeRecord(ctx context.Context, revisionStatement, fieldStatement *sql.Stmt, taskID string, record *kube.ObjectRevision) error {
 	if record == nil {
 		return nil
 	}
@@ -406,12 +418,7 @@ func insertKubeRecord(ctx context.Context, tx *sql.Tx, taskID string, record *ku
 	if record.Identity.Sensitive {
 		objectName = record.Identity.DisplayName
 	}
-	result, err := tx.ExecContext(ctx, `
-INSERT INTO kube_revision_records (
-  task_id, key_hash, main_revision, sub_revision, storage_prefix, api_group, resource,
-  namespace, object_name, display_name, crd, cluster_scoped, sensitive, content_type,
-  decode_status, value_bytes
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	result, err := revisionStatement.ExecContext(ctx,
 		taskID, record.KeyHash, record.MainRevision, record.SubRevision,
 		record.Identity.StoragePrefix, record.Identity.APIGroup, record.Identity.Resource,
 		record.Identity.Namespace, objectName, record.Identity.DisplayName,
@@ -425,10 +432,7 @@ INSERT INTO kube_revision_records (
 		return fmt.Errorf("read Kubernetes revision id: %w", err)
 	}
 	for _, field := range record.Fields {
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO kube_field_records (
-  task_id, kube_revision_id, key_hash, main_revision, path, byte_size, type_class, field_hash
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, taskID, revisionID, record.KeyHash,
+		if _, err := fieldStatement.ExecContext(ctx, taskID, revisionID, record.KeyHash,
 			record.MainRevision, field.Path, field.ByteSize, field.TypeClass, field.Hash); err != nil {
 			return fmt.Errorf("insert Kubernetes field: %w", err)
 		}

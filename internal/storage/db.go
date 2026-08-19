@@ -32,7 +32,10 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	db.SetMaxOpenConns(1)
+	// Keep the logical writer single-threaded in repository code while allowing
+	// the streaming Kubernetes diff reader and a committed batch writer to use
+	// separate SQLite connections under WAL.
+	db.SetMaxOpenConns(4)
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)

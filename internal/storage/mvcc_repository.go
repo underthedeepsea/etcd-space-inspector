@@ -201,29 +201,55 @@ func (r *MVCCRepository) StoreRecords(ctx context.Context, records []mvcc.Record
 	if err != nil {
 		return fmt.Errorf("begin revision batch: %w", err)
 	}
-	statement, err := tx.PrepareContext(ctx, `
+	defer tx.Rollback()
+	revisionStatement, err := tx.PrepareContext(ctx, `
 INSERT INTO revision_records (
   task_id, key_hash, key_text, key_bytes, main_revision, sub_revision, create_revision,
   mod_revision, version, lease_id, value_bytes, stored_bytes, tombstone, value_hash
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
-		tx.Rollback()
 		return fmt.Errorf("prepare revision batch: %w", err)
 	}
-	defer statement.Close()
+	kubeRevisionStatement, err := tx.PrepareContext(ctx, kubeRevisionInsertSQL)
+	if err != nil {
+		revisionStatement.Close()
+		return fmt.Errorf("prepare Kubernetes revision batch: %w", err)
+	}
+	fieldStatement, err := tx.PrepareContext(ctx, kubeFieldInsertSQL)
+	if err != nil {
+		revisionStatement.Close()
+		kubeRevisionStatement.Close()
+		return fmt.Errorf("prepare Kubernetes field batch: %w", err)
+	}
 	for _, record := range records {
 		revision := record.Revision
-		if _, err := statement.ExecContext(ctx, r.taskID, revision.KeyHash, revision.KeyText, revision.KeyBytes,
+		if _, err := revisionStatement.ExecContext(ctx, r.taskID, revision.KeyHash, revision.KeyText, revision.KeyBytes,
 			revision.MainRevision, revision.SubRevision, revision.CreateRevision, revision.ModRevision,
 			revision.Version, revision.LeaseID, revision.ValueBytes, revision.StoredBytes,
 			revision.Tombstone, revision.ValueHash); err != nil {
-			tx.Rollback()
+			revisionStatement.Close()
+			kubeRevisionStatement.Close()
+			fieldStatement.Close()
 			return fmt.Errorf("insert revision: %w", err)
 		}
-		if err := insertKubeRecord(ctx, tx, r.taskID, record.Kubernetes); err != nil {
-			tx.Rollback()
+		if err := insertKubeRecord(ctx, kubeRevisionStatement, fieldStatement, r.taskID, record.Kubernetes); err != nil {
+			revisionStatement.Close()
+			kubeRevisionStatement.Close()
+			fieldStatement.Close()
 			return err
 		}
+	}
+	if err := revisionStatement.Close(); err != nil {
+		kubeRevisionStatement.Close()
+		fieldStatement.Close()
+		return fmt.Errorf("close revision batch: %w", err)
+	}
+	if err := kubeRevisionStatement.Close(); err != nil {
+		fieldStatement.Close()
+		return fmt.Errorf("close Kubernetes revision batch: %w", err)
+	}
+	if err := fieldStatement.Close(); err != nil {
+		return fmt.Errorf("close Kubernetes field batch: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit revision batch: %w", err)
