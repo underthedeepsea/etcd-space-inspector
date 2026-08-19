@@ -206,6 +206,16 @@ func (s *Service) TaskDir(id string) string {
 	return filepath.Join(s.tasksDir(), id)
 }
 
+// ServerLeasePath returns the data-directory service lease path.
+func (s *Service) ServerLeasePath() string {
+	return filepath.Join(s.dataDir, "runtime", "server.lock")
+}
+
+// TaskLeasePath returns the per-task worker lease path.
+func (s *Service) TaskLeasePath(id string) string {
+	return filepath.Join(s.TaskDir(id), "run.lock")
+}
+
 // ResolveTaskRelative resolves a slash-separated path within one task directory.
 func (s *Service) ResolveTaskRelative(id, relative string) (string, error) {
 	if err := validID(id); err != nil {
