@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -41,6 +42,10 @@ type RuntimeStats struct {
 	DiskFreeBytes uint64
 }
 
+func diskFreePath(taskDBPath string) string {
+	return filepath.Dir(taskDBPath)
+}
+
 // CollectRuntimeStats reads Go runtime and SQLite file sizes without opening
 // the database or exposing any task contents.
 func CollectRuntimeStats(taskDBPath string) RuntimeStats {
@@ -58,7 +63,7 @@ func CollectRuntimeStats(taskDBPath string) RuntimeStats {
 	if info, err := os.Stat(taskDBPath + "-wal"); err == nil {
 		stats.WALBytes = info.Size()
 	}
-	stats.DiskFreeBytes = diskFreeBytes(taskDBPath)
+	stats.DiskFreeBytes = diskFreeBytes(diskFreePath(taskDBPath))
 	return stats
 }
 

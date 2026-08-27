@@ -4,9 +4,16 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
+
+func TestDiskFreePathUsesTaskDBDirectory(t *testing.T) {
+	if got := diskFreePath(filepath.Join("tasks", "task.db")); got != "tasks" {
+		t.Fatalf("disk free path = %q; want task DB directory", got)
+	}
+}
 
 func TestCollectRuntimeStatsIncludesDiskFreeForExistingTaskDB(t *testing.T) {
 	taskDBPath := filepath.Join(t.TempDir(), "task.db")
@@ -15,15 +22,24 @@ func TestCollectRuntimeStatsIncludesDiskFreeForExistingTaskDB(t *testing.T) {
 	}
 
 	stats := CollectRuntimeStats(taskDBPath)
-	if stats.DiskFreeBytes == 0 {
+	if nativeDiskFreeBytesAvailable() && stats.DiskFreeBytes == 0 {
 		t.Fatal("disk free bytes = 0 for existing task database")
 	}
 }
 
 func TestCollectRuntimeStatsDoesNotPanicWhenTaskDBAndWALAreAbsent(t *testing.T) {
-	stats := CollectRuntimeStats(filepath.Join(t.TempDir(), "missing-task.db"))
-	if stats.TaskDBBytes != 0 || stats.WALBytes != 0 {
-		t.Fatalf("database sizes = %d, %d; want zero", stats.TaskDBBytes, stats.WALBytes)
+	stats := CollectRuntimeStats(filepath.Join(t.TempDir(), "missing", "task.db"))
+	if stats.TaskDBBytes != 0 || stats.WALBytes != 0 || stats.DiskFreeBytes != 0 {
+		t.Fatalf("runtime stats = %+v; want zero database and disk-free values", stats)
+	}
+}
+
+func nativeDiskFreeBytesAvailable() bool {
+	switch runtime.GOOS {
+	case "darwin", "dragonfly", "freebsd", "linux", "openbsd", "windows":
+		return true
+	default:
+		return false
 	}
 }
 

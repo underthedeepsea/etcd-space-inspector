@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"testing"
 )
 
@@ -34,8 +35,21 @@ func TestWriteAnalysisHeartbeatIncludesDiskFreeBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := regexp.MustCompile(`^heartbeat task=task-1 run=run-1 stage=mvcc-scan heap_alloc_bytes=\d+ heap_sys_bytes=\d+ gc_count=\d+ goroutines=\d+ task_db_bytes=6 wal_bytes=0 disk_free_bytes=[1-9]\d*\n$`)
-	if !want.Match(output) {
+	want := regexp.MustCompile(`^heartbeat task=task-1 run=run-1 stage=mvcc-scan heap_alloc_bytes=\d+ heap_sys_bytes=\d+ gc_count=\d+ goroutines=\d+ task_db_bytes=6 wal_bytes=0 disk_free_bytes=(\d+)\n$`)
+	matches := want.FindSubmatch(output)
+	if matches == nil {
 		t.Fatalf("heartbeat=%q; want required runtime diagnostics", output)
+	}
+	if nativeDiskFreeBytesAvailable() && string(matches[1]) == "0" {
+		t.Fatalf("heartbeat=%q; want nonzero disk free bytes on native platform", output)
+	}
+}
+
+func nativeDiskFreeBytesAvailable() bool {
+	switch runtime.GOOS {
+	case "darwin", "dragonfly", "freebsd", "linux", "openbsd", "windows":
+		return true
+	default:
+		return false
 	}
 }
