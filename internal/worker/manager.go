@@ -421,7 +421,7 @@ func (m *Manager) logEvent(event string, run *managedRun, cause error) {
 		fields["run"] = run.runID
 	}
 	if cause != nil {
-		_ = cause
+		fields["cause"] = runlog.SafeCause(cause)
 	}
 	_ = m.config.ServerLog.Event("ERROR", "worker-manager", event, fields)
 }
