@@ -1,7 +1,6 @@
 package runlog
 
 import (
-	"errors"
 	"os"
 	"regexp"
 	"strings"
@@ -13,9 +12,9 @@ import (
 const maxSafeCauseBytes = 2 << 10
 
 var (
-	windowsPath = regexp.MustCompile(`(?i)\b[a-z]:\\[^\s:]*`)
-	uncPath     = regexp.MustCompile(`\\\\[^\s]+`)
-	unixPath    = regexp.MustCompile(`/[^\s:]+`)
+	windowsPath = regexp.MustCompile(`(?i)\b[a-z]:\\.*?(?::\s|$)`)
+	uncPath     = regexp.MustCompile(`\\\\.*?(?::\s|$)`)
+	unixPath    = regexp.MustCompile(`/.*?(?::\s|$)`)
 )
 
 // SafeCause returns a single-line diagnostic that omits filesystem paths.
@@ -27,26 +26,23 @@ func SafeCause(err error) string {
 }
 
 func safeCause(err error) string {
-	var coded *apperr.Error
-	if errors.As(err, &coded) {
-		return cleanSafeCause(strings.TrimSpace(coded.Code + " " + coded.Message))
+	switch typed := err.(type) {
+	case *apperr.Error:
+		return cleanSafeCause(strings.TrimSpace(typed.Code + " " + typed.Message))
+	case *os.PathError:
+		return cleanSafeCause(strings.TrimSpace(typed.Op + " " + safeCause(typed.Err)))
+	case *os.LinkError:
+		return cleanSafeCause(strings.TrimSpace(typed.Op + " " + safeCause(typed.Err)))
+	default:
+		return cleanSafeCause(err.Error())
 	}
-	var pathErr *os.PathError
-	if errors.As(err, &pathErr) {
-		return cleanSafeCause(strings.TrimSpace(pathErr.Op + " " + safeCause(pathErr.Err)))
-	}
-	var linkErr *os.LinkError
-	if errors.As(err, &linkErr) {
-		return cleanSafeCause(strings.TrimSpace(linkErr.Op + " " + safeCause(linkErr.Err)))
-	}
-	return cleanSafeCause(err.Error())
 }
 
 func cleanSafeCause(value string) string {
 	value = strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(value)
-	value = windowsPath.ReplaceAllString(value, "[path]")
-	value = uncPath.ReplaceAllString(value, "[path]")
-	return unixPath.ReplaceAllString(value, "[path]")
+	value = windowsPath.ReplaceAllString(value, "[path] ")
+	value = uncPath.ReplaceAllString(value, "[path] ")
+	return unixPath.ReplaceAllString(value, "[path] ")
 }
 
 func truncateSafeCause(value string) string {
