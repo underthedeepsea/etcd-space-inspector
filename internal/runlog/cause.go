@@ -1,6 +1,7 @@
 package runlog
 
 import (
+	"errors"
 	"os"
 	"regexp"
 	"strings"
@@ -34,6 +35,9 @@ func safeCause(err error) string {
 	case *os.LinkError:
 		return cleanSafeCause(strings.TrimSpace(typed.Op + " " + safeCause(typed.Err)))
 	default:
+		if cause := errors.Unwrap(err); cause != nil {
+			return safeCause(cause)
+		}
 		return cleanSafeCause(err.Error())
 	}
 }

@@ -131,3 +131,11 @@ func TestSafeCauseKeepsApplicationCodeAndSafeMessage(t *testing.T) {
 		t.Fatalf("SafeCause=%q", got)
 	}
 }
+
+func TestSafeCauseKeepsWrappedApplicationCodeAndSafeMessage(t *testing.T) {
+	err := fmt.Errorf("worker operation: %w", apperr.E("BBOLT_OPEN_FAILED", "unable to open database", errors.New("private cause")))
+
+	if got := SafeCause(err); got != "BBOLT_OPEN_FAILED unable to open database" {
+		t.Fatalf("SafeCause=%q", got)
+	}
+}
