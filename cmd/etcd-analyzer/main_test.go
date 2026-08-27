@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"etcd-analyzer/internal/apperr"
 	domain "etcd-analyzer/internal/diff"
 	"etcd-analyzer/internal/storage"
 	"etcd-analyzer/internal/task"
@@ -63,6 +65,58 @@ func TestRunWorkerPanicWritesResultAndReturns(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "panic") || !strings.Contains(stderr.String(), "goroutine") {
 		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
+func TestRunWorkerLogsSafeOperationCauseAndKeepsGenericResult(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "tasks", "task-id")
+	if err := os.MkdirAll(taskDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request := worker.Request{TaskID: "task-id", RunID: "0123456789abcdef", Mode: worker.ModeAnalysis}
+	if err := worker.WriteRequest(taskDir, request); err != nil {
+		t.Fatal(err)
+	}
+	previousOperation := workerRunOperation
+	previousStdin := workerStdin
+	defer func() {
+		workerRunOperation = previousOperation
+		workerStdin = previousStdin
+	}()
+	workerStdin = strings.NewReader("")
+	workerRunOperation = func(context.Context, worker.Request) error {
+		return &os.PathError{Op: "open", Path: `C:\do-not-leak\snapshot.db`, Err: errors.New("sharing violation")}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runWorker([]string{
+		"--mode", "analysis", "--data-dir", root, "--task", "task-id", "--run", request.RunID,
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "worker operation failed") || !strings.Contains(strings.ToLower(stderr.String()), "open") {
+		t.Fatalf("stderr=%q, want safe operation cause", stderr.String())
+	}
+	if strings.Contains(stderr.String(), `C:\do-not-leak`) {
+		t.Fatalf("stderr leaked path: %q", stderr.String())
+	}
+	result, err := worker.ReadResult(taskDir, request.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ErrorMessage != "worker operation failed" {
+		t.Fatalf("result.ErrorMessage=%q", result.ErrorMessage)
+	}
+}
+
+func TestWorkerErrorCodePreservesApplicationCode(t *testing.T) {
+	if got := workerErrorCode(apperr.E("BBOLT_OPEN_FAILED", "unable to open database", errors.New("private cause"))); got != "BBOLT_OPEN_FAILED" {
+		t.Fatalf("workerErrorCode=%q", got)
+	}
+	if got := workerErrorCode(errors.New("uncoded failure")); got != "WORKER_FAILED" {
+		t.Fatalf("workerErrorCode=%q", got)
 	}
 }
 
