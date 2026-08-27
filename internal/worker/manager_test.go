@@ -85,6 +85,7 @@ func TestManagerMapsNonZeroExitAndClosesResources(t *testing.T) {
 func TestManagerLogsSafeSupervisorCause(t *testing.T) {
 	root := t.TempDir()
 	manifests, item := managerTask(t, root)
+	runID := "0123456789abcdef"
 	serverLog, err := runlog.OpenServer(root, 1<<20, 3, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +100,7 @@ func TestManagerLogsSafeSupervisorCause(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := manager.Start(context.Background(), Request{TaskID: item.ID, Mode: ModeAnalysis}); err == nil {
+	if _, err := manager.Start(context.Background(), Request{TaskID: item.ID, RunID: runID, Mode: ModeAnalysis}); err == nil {
 		t.Fatal("Start unexpectedly succeeded")
 	}
 	data, err := os.ReadFile(filepath.Join(root, "logs", "server.log"))
@@ -107,7 +108,13 @@ func TestManagerLogsSafeSupervisorCause(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := string(data)
-	for _, want := range []string{"ERROR worker-manager worker-start-failed", "cause="} {
+	for _, want := range []string{
+		"ERROR worker-manager worker-start-failed",
+		"cause=fork[path]",
+		"error_code=WORKER_START_FAILED",
+		"task=" + item.ID,
+		"run=" + runID,
+	} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("server log missing %q: %q", want, log)
 		}

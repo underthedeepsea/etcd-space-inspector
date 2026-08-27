@@ -301,7 +301,7 @@ func (m *Manager) heartbeat(run *managedRun) {
 		select {
 		case <-ticker.C:
 			if err := run.lease.Heartbeat(); err != nil {
-				m.logEvent("lease-heartbeat-failed", run, err)
+				m.logEvent("lease-heartbeat-failed", run, "", err)
 			}
 			// The worker is the sole runtime manifest writer. The parent only
 			// renews the lease so Windows cannot observe concurrent manifest
@@ -360,14 +360,14 @@ func (m *Manager) wait(run *managedRun) {
 			item.ErrorMessage = "worker exited unexpectedly"
 		}
 	} else {
-		m.logEvent("task-finalize-read-failed", run, itemErr)
+		m.logEvent("task-finalize-read-failed", run, "", itemErr)
 	}
 	_ = os.Remove(filepath.Join(run.taskDir, RequestFileName))
 	_ = run.log.Close()
 	_ = run.lease.Release()
 	if itemErr == nil {
 		if err := m.tasks.SaveForRun(item, run.runID); err != nil {
-			m.logEvent("manifest-finalize-failed", run, err)
+			m.logEvent("manifest-finalize-failed", run, "", err)
 		}
 	}
 	close(run.done)
@@ -381,10 +381,10 @@ func (m *Manager) failStart(item task.Task, runID string, logFile *os.File, leas
 	item.CompletedAt = &now
 	item.ExitCode = 1
 	if err := m.tasks.SaveForRun(item, runID); err != nil {
-		m.logEvent("worker-start-finalize-failed", nil, err)
+		m.logEvent("worker-start-finalize-failed", nil, "", err)
 	}
 	if cause != nil {
-		m.logEvent("worker-start-failed", nil, cause)
+		m.logEvent("worker-start-failed", &managedRun{taskID: item.ID, runID: runID}, code, cause)
 	}
 	_ = os.Remove(filepath.Join(m.tasks.TaskDir(item.ID), RequestFileName))
 	_ = logFile.Close()
@@ -411,7 +411,7 @@ func (m *Manager) waitRuns(runs []*managedRun) {
 	}
 }
 
-func (m *Manager) logEvent(event string, run *managedRun, cause error) {
+func (m *Manager) logEvent(event string, run *managedRun, errorCode string, cause error) {
 	if m.config.ServerLog == nil {
 		return
 	}
@@ -419,6 +419,9 @@ func (m *Manager) logEvent(event string, run *managedRun, cause error) {
 	if run != nil {
 		fields["task"] = run.taskID
 		fields["run"] = run.runID
+	}
+	if errorCode != "" {
+		fields["error_code"] = errorCode
 	}
 	if cause != nil {
 		fields["cause"] = runlog.SafeCause(cause)
