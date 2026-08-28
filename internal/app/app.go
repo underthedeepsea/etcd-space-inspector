@@ -278,7 +278,10 @@ func (a *Application) Create(ctx context.Context, request task.CreateRequest) (t
 		if err != nil {
 			return task.Task{}, err
 		}
-		if _, err := manager.Start(ctx, worker.Request{TaskID: item.ID, Mode: worker.ModeImport}); err != nil {
+		// Worker lifetimes are independent of the request that created them. The
+		// HTTP handler's context is cancelled as soon as its response is sent;
+		// explicit Cancel and Shutdown calls own background-worker cancellation.
+		if _, err := manager.Start(context.Background(), worker.Request{TaskID: item.ID, Mode: worker.ModeImport}); err != nil {
 			return task.Task{}, err
 		}
 		return item, nil
@@ -387,7 +390,7 @@ func (a *Application) Start(ctx context.Context, id string) error {
 	manager := a.workerManager
 	a.mu.Unlock()
 	if manager != nil && isManagedInput(item.InputType) {
-		_, err := manager.Start(ctx, worker.Request{
+		_, err := manager.Start(context.Background(), worker.Request{
 			TaskID: id, Mode: worker.ModeAnalysis, WorkerCount: a.workerCount,
 			ChannelSize: a.channelSize, SQLiteBatchSize: a.sqliteBatchSize,
 		})

@@ -225,6 +225,46 @@ func TestManagedCreateStartsAsyncImportWithoutReturningExternalPath(t *testing.T
 	}
 }
 
+func TestManagedWorkerStartOutlivesRequestContext(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "input.db")
+	if err := os.WriteFile(source, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application := NewM5(filepath.Join(root, "data"), 100, 1, 128)
+	fake := &fakeWorkerManager{}
+	application.workerManager = fake
+	requestContext, cancel := context.WithCancel(context.Background())
+	if _, err := application.Create(requestContext, task.CreateRequest{
+		Name: "async", SourcePath: source, InputType: "snapshot", MaxInputBytes: 1024,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if len(fake.startContexts) != 1 {
+		t.Fatalf("start contexts=%d, want 1", len(fake.startContexts))
+	}
+	if err := fake.startContexts[0].Err(); err != nil {
+		t.Fatalf("worker context inherited request cancellation: %v", err)
+	}
+
+	analysisApplication := NewM5(filepath.Join(root, "analysis-data"), 100, 1, 128)
+	analysisItem := createApplicationTask(t, analysisApplication, "analysis")
+	analysisFake := &fakeWorkerManager{}
+	analysisApplication.workerManager = analysisFake
+	analysisContext, analysisCancel := context.WithCancel(context.Background())
+	if err := analysisApplication.Start(analysisContext, analysisItem.ID); err != nil {
+		t.Fatal(err)
+	}
+	analysisCancel()
+	if len(analysisFake.startContexts) != 1 {
+		t.Fatalf("analysis start contexts=%d, want 1", len(analysisFake.startContexts))
+	}
+	if err := analysisFake.startContexts[0].Err(); err != nil {
+		t.Fatalf("analysis worker context inherited request cancellation: %v", err)
+	}
+}
+
 func TestManagedStartCancelAndShutdownDelegateToWorkerManager(t *testing.T) {
 	application := NewM5(filepath.Join(t.TempDir(), "data"), 100, 1, 128)
 	item := createApplicationTask(t, application, "managed")
@@ -289,13 +329,15 @@ func TestRecoverDamagedTaskDoesNotBlockOtherTasks(t *testing.T) {
 }
 
 type fakeWorkerManager struct {
-	starts    []worker.Request
-	cancelled string
-	shutdown  bool
+	starts        []worker.Request
+	startContexts []context.Context
+	cancelled     string
+	shutdown      bool
 }
 
-func (f *fakeWorkerManager) Start(_ context.Context, request worker.Request) (task.Task, error) {
+func (f *fakeWorkerManager) Start(ctx context.Context, request worker.Request) (task.Task, error) {
 	f.starts = append(f.starts, request)
+	f.startContexts = append(f.startContexts, ctx)
 	return task.Task{ID: request.TaskID, Status: task.StatusImporting}, nil
 }
 
