@@ -1,0 +1,12 @@
+server:
+  listen: 127.0.0.1:8080
+  dataDir: ./analysis-data
+
+analysis:
+  workerCount: 4
+  channelSize: 128
+  sqliteBatchSize: 1000
+  maxConcurrent: 1
+
+security:
+  maxInputBytes: 53687091200
