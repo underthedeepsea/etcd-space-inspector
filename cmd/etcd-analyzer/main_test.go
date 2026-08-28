@@ -120,6 +120,22 @@ func TestWorkerErrorCodePreservesApplicationCode(t *testing.T) {
 	}
 }
 
+func TestIsTestExecutablePathRecognizesWindowsTestBinaries(t *testing.T) {
+	for _, test := range []struct {
+		path string
+		want bool
+	}{
+		{path: "etcd-analyzer.test", want: true},
+		{path: "etcd-analyzer.test.exe", want: true},
+		{path: "etcd-analyzer.exe", want: false},
+		{path: "etcd-analyzer.test-helper.exe", want: false},
+	} {
+		if got := isTestExecutablePath(test.path); got != test.want {
+			t.Errorf("isTestExecutablePath(%q)=%v, want %v", test.path, got, test.want)
+		}
+	}
+}
+
 func TestRunServerStopsWithContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

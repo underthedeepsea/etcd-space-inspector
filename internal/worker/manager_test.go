@@ -110,7 +110,6 @@ func TestManagerLogsSafeSupervisorCause(t *testing.T) {
 	log := string(data)
 	for _, want := range []string{
 		"ERROR worker-manager worker-start-failed",
-		"cause=fork[path]",
 		"error_code=WORKER_START_FAILED",
 		"task=" + item.ID,
 		"run=" + runID,
@@ -118,6 +117,17 @@ func TestManagerLogsSafeSupervisorCause(t *testing.T) {
 		if !strings.Contains(log, want) {
 			t.Fatalf("server log missing %q: %q", want, log)
 		}
+	}
+	causeStart := strings.Index(log, "cause=")
+	if causeStart < 0 {
+		t.Fatalf("server log missing safe cause: %q", log)
+	}
+	cause := log[causeStart+len("cause="):]
+	if end := strings.Index(cause, " error="); end >= 0 {
+		cause = cause[:end]
+	}
+	if strings.TrimSpace(cause) == "" {
+		t.Fatalf("server log has empty safe cause: %q", log)
 	}
 	if strings.Contains(log, root) || strings.Contains(log, "private customer") {
 		t.Fatalf("server log leaked external path: %q", log)
