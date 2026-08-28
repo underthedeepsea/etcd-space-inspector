@@ -1,6 +1,8 @@
 package diff
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -48,3 +50,40 @@ func TestServiceCreateValidatesObservationTimes(t *testing.T) {
 }
 
 func timePointer(value time.Time) *time.Time { return &value }
+
+func TestServiceManifestSupportsConcurrentReadsAndWrites(t *testing.T) {
+	service := NewService(t.TempDir())
+	item, err := service.Create(CreateRequest{Name: "concurrent", BaselineTaskID: "base", TargetTaskID: "target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const iterations = 200
+	errors := make(chan error, 2)
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		for index := 0; index < iterations; index++ {
+			item.Name = fmt.Sprintf("concurrent-%d", index)
+			if err := service.Save(item); err != nil {
+				errors <- fmt.Errorf("save iteration %d: %w", index, err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer group.Done()
+		for index := 0; index < iterations; index++ {
+			if _, err := service.Get(item.ID); err != nil {
+				errors <- fmt.Errorf("get iteration %d: %w", index, err)
+				return
+			}
+		}
+	}()
+	group.Wait()
+	close(errors)
+	for err := range errors {
+		t.Fatal(err)
+	}
+}

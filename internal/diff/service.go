@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -74,15 +75,21 @@ func (s *Service) Get(id string) (Comparison, error) {
 	if err := validID(id); err != nil {
 		return Comparison{}, err
 	}
-	data, err := os.ReadFile(filepath.Join(s.DiffDir(id), "manifest.json"))
-	if err != nil {
-		return Comparison{}, fmt.Errorf("read diff manifest: %w", err)
+	path := filepath.Join(s.DiffDir(id), "manifest.json")
+	for attempt := 0; attempt < 5; attempt++ {
+		data, err := readManifest(path)
+		if err != nil {
+			return Comparison{}, fmt.Errorf("read diff manifest: %w", err)
+		}
+		var item Comparison
+		if err := json.Unmarshal(data, &item); err == nil {
+			return item, nil
+		} else if attempt == 4 {
+			return Comparison{}, fmt.Errorf("decode diff manifest: %w", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	var item Comparison
-	if err := json.Unmarshal(data, &item); err != nil {
-		return Comparison{}, fmt.Errorf("decode diff manifest: %w", err)
-	}
-	return item, nil
+	panic("unreachable")
 }
 
 // List returns comparison manifests newest first.
@@ -163,6 +170,12 @@ func (s *Service) writeManifest(item Comparison) error {
 		return fmt.Errorf("encode diff manifest: %w", err)
 	}
 	path := filepath.Join(s.DiffDir(item.ID), "manifest.json")
+	if runtime.GOOS == "windows" {
+		if err := writeFileInPlace(path, append(data, '\n')); err != nil {
+			return fmt.Errorf("write diff manifest: %w", err)
+		}
+		return nil
+	}
 	temporary := path + ".tmp"
 	if err := os.WriteFile(temporary, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write diff manifest: %w", err)
@@ -172,6 +185,50 @@ func (s *Service) writeManifest(item Comparison) error {
 		return fmt.Errorf("replace diff manifest: %w", err)
 	}
 	return nil
+}
+
+func readManifest(path string) ([]byte, error) {
+	attempts := 5
+	if runtime.GOOS == "windows" {
+		attempts = 50
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		data, err := os.ReadFile(path)
+		if err == nil || os.IsNotExist(err) || attempt == attempts-1 {
+			return data, err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	panic("unreachable")
+}
+
+func writeFileInPlace(path string, data []byte) error {
+	attempts := 1
+	if runtime.GOOS == "windows" {
+		attempts = 50
+	}
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		file, openErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if openErr == nil {
+			if _, err = file.Write(data); err == nil {
+				err = file.Sync()
+			}
+			closeErr := file.Close()
+			if err == nil {
+				err = closeErr
+			}
+			if err == nil {
+				return nil
+			}
+		} else {
+			err = openErr
+		}
+		if attempt+1 < attempts {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	return err
 }
 
 func validID(id string) error {
