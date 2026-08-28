@@ -21,12 +21,16 @@ make build
 Windows PowerShell：
 
 ```powershell
-npm --prefix web ci
+.\scripts\verify.ps1
+.\scripts\build.ps1
+.\scripts\package.ps1
+
+# 兼容旧命令：仍然指向上面的 canonical 脚本
 .\check.ps1
 .\build.ps1
 ```
 
-产物为 `bin\etcd-analyzer.exe`。Windows 路径可使用盘符路径或当前用户有权访问的 UNC 路径：
+`check.ps1` 和 `build.ps1` 是兼容 wrapper；canonical 脚本会先检查 Go、Node.js、npm 和 `VERSION`，使用 `npm ci`、`-trimpath` 与版本 smoke check。产物为 `bin\etcd-analyzer.exe`。Windows 路径可使用盘符路径或当前用户有权访问的 UNC 路径：
 
 ```powershell
 .\bin\etcd-analyzer.exe analyze `
@@ -46,6 +50,25 @@ npm --prefix web ci
 ```
 
 UNC 示例：`\\server\share\snapshot.db`。共享目录必须已由当前 Windows 用户授权访问，本工具不会挂载共享或处理登录凭据。
+
+### 下载 Windows Release
+
+没有 Go/Node.js 工具链时，下载 GitHub Release 中的
+`etcd-space-inspector-v<version>-windows-amd64.zip` 和 `SHA256SUMS.txt`，在
+PowerShell 中校验并启动：
+
+```powershell
+$zip = Get-Item .\etcd-space-inspector-v*-windows-amd64.zip
+$expected = (Get-Content .\SHA256SUMS.txt | ForEach-Object { ($_ -split '\s+')[0] })
+$actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'SHA256 mismatch' }
+Expand-Archive $zip .\etcd-space-inspector -Force
+Set-Location .\etcd-space-inspector
+.\start.cmd
+```
+
+也可以运行 `.\start.ps1`，然后打开 `http://127.0.0.1:8080`。默认只监听
+loopback；只有在明确评估防火墙和访问控制后才应改为远程监听。
 
 ## CLI
 
@@ -130,7 +153,11 @@ security:
 
 Snapshot 任务状态依次可能为 `importing`、`pending`、`running`、`completed`、`failed` 或 `cancelled`。任务页展示导入字节进度、MVCC/Kubernetes 子阶段、已处理/总数、速率、耗时、最近心跳、满足 5 秒样本条件时的 ETA 和退出码。已知总量使用原生进度条；未知总量只显示文字状态。取消会关闭 Worker 控制管道，Worker 有限时间内退出；超时则由 Manager 强制终止，并把任务落到终态。
 
-可配置参数有硬上限：`workerCount` 为 1–8，`channelSize` 为 1–4096，`sqliteBatchSize` 为 1–10000，同时分析任务为 1–2。单个 Kubernetes Value 超过 32 MiB、JSON 深度超过 128 或字段节点超过 50,000 时只保留安全元数据；最大字段候选只保留 20 项。Windows PowerShell 的 `check.ps1` 会在完整测试后串行运行 M12 Worker/lease/recovery 聚焦测试，`build.ps1` 生成 `bin\etcd-analyzer.exe`。
+可配置参数有硬上限：`workerCount` 为 1–8，`channelSize` 为 1–4096，`sqliteBatchSize` 为 1–10000，同时分析任务为 1–2。单个 Kubernetes Value 超过 32 MiB、JSON 深度超过 128 或字段节点超过 50,000 时只保留安全元数据；最大字段候选只保留 20 项。Windows PowerShell 的 `scripts\verify.ps1` 会在完整测试后串行运行 M12 Worker/lease/recovery 聚焦测试，`scripts\build.ps1` 生成 `bin\etcd-analyzer.exe`，`scripts\package.ps1` 生成可直接解压运行的 ZIP。
+
+失败诊断保存在 `analysis-data\logs\server.log` 和
+`analysis-data\tasks\<task-id>\logs\<run-id>.log`。run 日志包含安全的
+错误原因和 Worker/运行上下文，不包含原始外部输入路径、Value、Token 或 Secret；可复制这些日志和任务 manifest 手动收集诊断，但分享前应移除敏感文件。
 
 M12 不把 Snapshot 差分任务迁移到 Worker；差分仍由父进程管理，Worker 隔离故障不会覆盖差分任务的剩余风险。Kubernetes 流式字段差异和 SQLite statement 复用已加入可选 20,000 修订长测；性能需结合同机数据规模、SQLite 版本和磁盘复测，不能把单次基准当成通用 SLA。
 

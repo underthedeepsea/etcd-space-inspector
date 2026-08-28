@@ -4,6 +4,7 @@
 
 | 版本与标签 | 发布分支 | 里程碑 | 主要能力 |
 | --- | --- | --- | --- |
+| `0.12.1` / `v0.12.1`（由 tag workflow 验证后发布） | `release/0.12.1` | Windows 大 Snapshot 发布可靠性 | 安全 Worker/supervisor 错误原因、DB/WAL/磁盘 heartbeat 诊断、无重叠可取消前端轮询、canonical Windows 构建/验证、`start.cmd`/`start.ps1` 便携包、SHA256 校验，以及原生 Windows 有效 1 GiB+ Snapshot gate。发布记录只有在 tag workflow 的 native gate 通过后才视为完成。 |
 | `0.12.0` / `v0.12.0`（GitHub 发布流程中） | `release/0.12.0` | M12 大 Snapshot 可靠分析 | Snapshot/raw-db 导入与分析的隔离 Worker、持久化服务/run 日志、lease 与恢复、字节/MVCC/Kubernetes 子阶段进度、资源边界、SQLite batch statement 复用和 Kubernetes 字段差异流式聚合；差分任务仍由父进程管理。 |
 | `0.11.0` / `v0.11.0`（待发布） | `release/0.11.0` | M11 核心指标时间关联 | 本地 Prometheus query_range matrix 导入、七类 etcd 核心指标时间线，以及双 Snapshot 实际采集窗口内的增长起点、Counter 峰值、quota、可能的 defrag 差值和延迟 P99 证据；来源一致性未经验证，时间重合不作为因果证明。 |
 | `0.10.0` / `v0.10.0` | `release/0.10.0` | M10 Audit 写入来源证据 | 独立 Kubernetes Audit JSONL/gzip 任务、对象级 Snapshot 差分，以及 `(baseline,target]` 窗口内按对象、Resource、Namespace 匹配的 high/medium/low 候选写入主体；原始对象、URI、完整 IP/UA 不进入标准化产物，来源一致性始终标为未验证。 |
