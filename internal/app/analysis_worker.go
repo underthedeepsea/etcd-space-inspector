@@ -140,7 +140,7 @@ func writeAnalysisHeartbeats(ctx context.Context, manifests *task.Service, taskD
 func writeAnalysisHeartbeat(taskDBPath, taskID, runID, stage string) {
 	stats := task.CollectRuntimeStats(taskDBPath)
 	_, _ = fmt.Fprintf(os.Stdout,
-		"heartbeat task=%s run=%s stage=%s heap_alloc_bytes=%d heap_sys_bytes=%d gc_count=%d goroutines=%d task_db_bytes=%d wal_bytes=%d\n",
-		taskID, runID, stage, stats.HeapAlloc, stats.HeapSys, stats.NumGC, stats.Goroutines, stats.TaskDBBytes, stats.WALBytes,
+		"heartbeat task=%s run=%s stage=%s heap_alloc_bytes=%d heap_sys_bytes=%d gc_count=%d goroutines=%d task_db_bytes=%d wal_bytes=%d disk_free_bytes=%d\n",
+		taskID, runID, stage, stats.HeapAlloc, stats.HeapSys, stats.NumGC, stats.Goroutines, stats.TaskDBBytes, stats.WALBytes, stats.DiskFreeBytes,
 	)
 }

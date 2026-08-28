@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -32,12 +33,17 @@ type Reporter interface {
 
 // RuntimeStats contains safe, value-free heartbeat measurements.
 type RuntimeStats struct {
-	HeapAlloc   uint64
-	HeapSys     uint64
-	NumGC       uint32
-	Goroutines  int
-	TaskDBBytes int64
-	WALBytes    int64
+	HeapAlloc     uint64
+	HeapSys       uint64
+	NumGC         uint32
+	Goroutines    int
+	TaskDBBytes   int64
+	WALBytes      int64
+	DiskFreeBytes uint64
+}
+
+func diskFreePath(taskDBPath string) string {
+	return filepath.Dir(taskDBPath)
 }
 
 // CollectRuntimeStats reads Go runtime and SQLite file sizes without opening
@@ -57,6 +63,7 @@ func CollectRuntimeStats(taskDBPath string) RuntimeStats {
 	if info, err := os.Stat(taskDBPath + "-wal"); err == nil {
 		stats.WALBytes = info.Size()
 	}
+	stats.DiskFreeBytes = diskFreeBytes(diskFreePath(taskDBPath))
 	return stats
 }
 

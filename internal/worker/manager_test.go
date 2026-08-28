@@ -82,6 +82,58 @@ func TestManagerMapsNonZeroExitAndClosesResources(t *testing.T) {
 	}
 }
 
+func TestManagerLogsSafeSupervisorCause(t *testing.T) {
+	root := t.TempDir()
+	manifests, item := managerTask(t, root)
+	runID := "0123456789abcdef"
+	serverLog, err := runlog.OpenServer(root, 1<<20, 3, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = serverLog.Close() })
+	manager, err := NewManager(ManagerConfig{
+		Executable: filepath.Join(root, "private customer", "worker"), DataDir: root, OwnerID: "owner",
+		HeartbeatEvery: 10 * time.Millisecond, StaleAfter: time.Minute, ShutdownTimeout: time.Second,
+		MaxImports: 1, MaxAnalyses: 1, ServerLog: serverLog,
+	}, manifests)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := manager.Start(context.Background(), Request{TaskID: item.ID, RunID: runID, Mode: ModeAnalysis}); err == nil {
+		t.Fatal("Start unexpectedly succeeded")
+	}
+	data, err := os.ReadFile(filepath.Join(root, "logs", "server.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	for _, want := range []string{
+		"ERROR worker-manager worker-start-failed",
+		"error_code=WORKER_START_FAILED",
+		"task=" + item.ID,
+		"run=" + runID,
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("server log missing %q: %q", want, log)
+		}
+	}
+	causeStart := strings.Index(log, "cause=")
+	if causeStart < 0 {
+		t.Fatalf("server log missing safe cause: %q", log)
+	}
+	cause := log[causeStart+len("cause="):]
+	if end := strings.Index(cause, " error="); end >= 0 {
+		cause = cause[:end]
+	}
+	if strings.TrimSpace(cause) == "" {
+		t.Fatalf("server log has empty safe cause: %q", log)
+	}
+	if strings.Contains(log, root) || strings.Contains(log, "private customer") {
+		t.Fatalf("server log leaked external path: %q", log)
+	}
+}
+
 func TestManagerMapsSuccessAndRejectsDuplicateStart(t *testing.T) {
 	setHelperMode(t, "success")
 	root := t.TempDir()

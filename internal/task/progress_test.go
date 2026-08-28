@@ -2,9 +2,46 @@ package task
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
+
+func TestDiskFreePathUsesTaskDBDirectory(t *testing.T) {
+	if got := diskFreePath(filepath.Join("tasks", "task.db")); got != "tasks" {
+		t.Fatalf("disk free path = %q; want task DB directory", got)
+	}
+}
+
+func TestCollectRuntimeStatsIncludesDiskFreeForExistingTaskDB(t *testing.T) {
+	taskDBPath := filepath.Join(t.TempDir(), "task.db")
+	if err := os.WriteFile(taskDBPath, []byte("sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := CollectRuntimeStats(taskDBPath)
+	if nativeDiskFreeBytesAvailable() && stats.DiskFreeBytes == 0 {
+		t.Fatal("disk free bytes = 0 for existing task database")
+	}
+}
+
+func TestCollectRuntimeStatsDoesNotPanicWhenTaskDBAndWALAreAbsent(t *testing.T) {
+	stats := CollectRuntimeStats(filepath.Join(t.TempDir(), "missing", "task.db"))
+	if stats.TaskDBBytes != 0 || stats.WALBytes != 0 || stats.DiskFreeBytes != 0 {
+		t.Fatalf("runtime stats = %+v; want zero database and disk-free values", stats)
+	}
+}
+
+func nativeDiskFreeBytesAvailable() bool {
+	switch runtime.GOOS {
+	case "darwin", "dragonfly", "freebsd", "linux", "openbsd", "windows":
+		return true
+	default:
+		return false
+	}
+}
 
 func TestProgressReporterThrottlesAndCalculatesETA(t *testing.T) {
 	now := time.Date(2026, 8, 19, 1, 0, 0, 0, time.UTC)

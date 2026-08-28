@@ -469,7 +469,13 @@ func runManagedAnalyze(args []string, stdout, stderr io.Writer) int {
 }
 
 func isTestExecutable() bool {
-	return strings.HasSuffix(filepath.Base(os.Args[0]), ".test")
+	return isTestExecutablePath(os.Args[0])
+}
+
+func isTestExecutablePath(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	base = strings.TrimSuffix(base, ".exe")
+	return strings.HasSuffix(base, ".test")
 }
 
 func runReport(args []string, stdout, stderr io.Writer) int {

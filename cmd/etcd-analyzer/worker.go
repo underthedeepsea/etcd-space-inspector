@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"etcd-analyzer/internal/app"
+	"etcd-analyzer/internal/apperr"
+	"etcd-analyzer/internal/runlog"
 	"etcd-analyzer/internal/task"
 	"etcd-analyzer/internal/worker"
 )
@@ -80,9 +83,10 @@ func runWorker(args []string, stdout, stderr io.Writer) (exitCode int) {
 	}()
 	if err := workerRunOperation(ctx, request); err != nil {
 		result.Status = "failed"
-		result.ErrorCode = "WORKER_FAILED"
+		result.ErrorCode = workerErrorCode(err)
 		result.ErrorMessage = "worker operation failed"
-		fmt.Fprintln(stderr, "worker operation failed")
+		fmt.Fprintf(stderr, "worker operation failed error_code=%s cause=%s\n", result.ErrorCode, runlog.SafeCause(err))
+		exitCode = 1
 	} else if ctx.Err() != nil {
 		result.Status = "cancelled"
 		result.ErrorCode = "TASK_CANCELLED"
@@ -100,6 +104,14 @@ func runWorker(args []string, stdout, stderr io.Writer) (exitCode int) {
 		return 1
 	}
 	return exitCode
+}
+
+func workerErrorCode(err error) string {
+	var coded *apperr.Error
+	if errors.As(err, &coded) && coded.Code != "" {
+		return coded.Code
+	}
+	return "WORKER_FAILED"
 }
 
 func validWorkerTaskID(value string) bool {
