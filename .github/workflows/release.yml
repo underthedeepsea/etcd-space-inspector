@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Check tag and package versions
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = (Get-Content -Raw VERSION).Trim()
+          $expected = "v$version"
+          $packageVersion = (Get-Content web/package.json | ConvertFrom-Json).version
+          if ($tag -ne $expected) {
+              throw "tag $tag does not match VERSION $expected"
+          }
+          if ($packageVersion -ne $version) {
+              throw "web/package.json version $packageVersion does not match VERSION $version"
+          }
+
+      - name: Verify on Windows
+        shell: pwsh
+        run: ./scripts/verify.ps1
+
+      - name: Build Windows package
+        shell: pwsh
+        run: ./scripts/package.ps1
+
+      - name: Run native large-snapshot gate
+        shell: pwsh
+        env:
+          ETCD_ANALYZER_WINDOWS_LARGE_TESTS: '1'
+        run: ./scripts/test-large-snapshot.ps1
+
+      - name: Upload large-snapshot diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-large-snapshot-diagnostics-${{ github.ref_name }}
+          path: dist/windows-large-snapshot-diagnostics
+          if-no-files-found: ignore
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $zip = Get-ChildItem -LiteralPath dist -Filter '*-windows-amd64.zip' | Select-Object -First 1
+          $checksums = Join-Path (Resolve-Path dist).Path 'SHA256SUMS.txt'
+          if ($null -eq $zip -or -not (Test-Path -LiteralPath $checksums)) {
+              throw 'Release package assets were not generated.'
+          }
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+              gh release upload $tag $zip.FullName $checksums --clobber
+          }
+          else {
+              gh release create $tag $zip.FullName $checksums --title $tag --generate-notes
+          }
