@@ -7,3 +7,4 @@
 /web/dist/*
 !/web/dist/.keep
 /web/.locales-test/
+/web/.polling-test/

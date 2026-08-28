@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "test:locales": "tsc -p tsconfig.locales-test.json && node .locales-test/locales.test.js"
+    "test:locales": "tsc -p tsconfig.locales-test.json && node .locales-test/locales.test.js",
+    "test:polling": "tsc -p tsconfig.polling-test.json && node .polling-test/polling.test.js"
   },
   "dependencies": {
     "react": "19.1.0",

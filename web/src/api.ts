@@ -485,21 +485,44 @@ export interface DiffObject {
 }
 export interface DiffObjectResult { items: DiffObject[]; total: number; objectsAvailable: boolean; page: number; pageSize: number }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: init?.body ? { 'Content-Type': 'application/json', ...init.headers } : init?.headers,
-  });
-  if (!response.ok) {
-    const error = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(error?.message ?? `Request failed (${response.status})`);
-  }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+export interface RequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
-export async function listTasks(): Promise<Task[]> {
-  const response = await request<{ items: Task[] }>('/api/v1/tasks');
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+  const callerSignal = options.signal ?? init?.signal;
+  const controller = callerSignal || options.timeoutMs !== undefined ? new AbortController() : undefined;
+  const abortFromCaller = () => controller?.abort(callerSignal?.reason);
+  const timeout = options.timeoutMs === undefined
+    ? undefined
+    : setTimeout(() => controller?.abort(new DOMException('Request timed out', 'TimeoutError')), options.timeoutMs);
+
+  if (callerSignal) {
+    if (callerSignal.aborted) abortFromCaller();
+    else callerSignal.addEventListener('abort', abortFromCaller, { once: true });
+  }
+
+  try {
+    const response = await fetch(path, {
+      ...init,
+      headers: init?.body ? { 'Content-Type': 'application/json', ...init.headers } : init?.headers,
+      signal: controller?.signal ?? init?.signal,
+    });
+    if (!response.ok) {
+      const error = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(error?.message ?? `Request failed (${response.status})`);
+    }
+    if (response.status === 204) return undefined as T;
+    return response.json() as Promise<T>;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    callerSignal?.removeEventListener('abort', abortFromCaller);
+  }
+}
+
+export async function listTasks(signal?: AbortSignal): Promise<Task[]> {
+  const response = await request<{ items: Task[] }>('/api/v1/tasks', undefined, { signal, timeoutMs: 10_000 });
   return response.items;
 }
 
@@ -519,8 +542,8 @@ export function deleteTask(id: string): Promise<void> {
   return request(`/api/v1/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
-export function taskLogs(taskId: string, tail = 200): Promise<TaskLogResult> {
-  return request(`/api/v1/tasks/${encodeURIComponent(taskId)}/logs?tail=${tail}`);
+export function taskLogs(taskId: string, tail = 200, signal?: AbortSignal): Promise<TaskLogResult> {
+  return request(`/api/v1/tasks/${encodeURIComponent(taskId)}/logs?tail=${tail}`, undefined, { signal, timeoutMs: 10_000 });
 }
 
 export function getOverview(id: string): Promise<SpaceSummary> {
@@ -629,8 +652,8 @@ export function listObjectRevisions(id: string, objectId: number): Promise<Objec
   return request(`/api/v1/tasks/${encodeURIComponent(id)}/objects/${objectId}/revisions?pageSize=100`);
 }
 
-export async function listComparisons(): Promise<Comparison[]> {
-  const response = await request<{ items: Comparison[] }>('/api/v1/diffs');
+export async function listComparisons(signal?: AbortSignal): Promise<Comparison[]> {
+  const response = await request<{ items: Comparison[] }>('/api/v1/diffs', undefined, { signal, timeoutMs: 10_000 });
   return response.items;
 }
 
