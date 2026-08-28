@@ -76,6 +76,7 @@ import {
   text,
   TextKey,
 } from './locales';
+import { createPollingLoop, runIndependentRefreshes } from './polling';
 import { MetricsTimelineAnalysis } from './MetricsTimeline';
 import { DiffMetricsEvidencePanel } from './MetricsEvidence';
 
@@ -215,21 +216,41 @@ export default function App() {
     window.localStorage.setItem(languagePreferenceKey, nextLocale);
   }
 
-  const refresh = useCallback(async () => {
+  const refreshTasks = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [nextTasks, nextComparisons] = await Promise.all([listTasks(), listComparisons()]);
+      const nextTasks = await listTasks(signal);
+      if (signal?.aborted) return;
       setTasks(nextTasks);
-      setComparisons(nextComparisons);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : t('tasks.loadFailed'));
+      if (!signal?.aborted) setMessage(error instanceof Error ? error.message : t('tasks.loadFailed'));
     }
   }, [t]);
 
+  const refreshComparisons = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const nextComparisons = await listComparisons(signal);
+      if (signal?.aborted) return;
+      setComparisons(nextComparisons);
+    } catch (error) {
+      if (!signal?.aborted) setMessage(error instanceof Error ? error.message : t('comparisons.loadFailed'));
+    }
+  }, [t]);
+
+  const refresh = useCallback(
+    () => runIndependentRefreshes(() => refreshTasks(), () => refreshComparisons()),
+    [refreshComparisons, refreshTasks],
+  );
+
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 2000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+    const tasksLoop = createPollingLoop({ intervalMs: 2000, run: refreshTasks });
+    const comparisonsLoop = createPollingLoop({ intervalMs: 2000, run: refreshComparisons });
+    tasksLoop.start();
+    comparisonsLoop.start();
+    return () => {
+      tasksLoop.stop();
+      comparisonsLoop.stop();
+    };
+  }, [refreshComparisons, refreshTasks]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -408,23 +429,21 @@ function TaskLogPanel({ task, onClose }: { task: Task; onClose: () => void }) {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    let active = true;
-    async function load() {
+    const loop = createPollingLoop({
+      intervalMs: 2000,
+      run: async (signal) => {
       try {
-        const next = await taskLogs(task.taskId, 200);
-        if (!active) return;
+        const next = await taskLogs(task.taskId, 200, signal);
+        if (signal.aborted) return;
         setResult(next);
         setError('');
       } catch (reason: unknown) {
-        if (active) setError(reason instanceof Error ? reason.message : t('taskLogs.loadFailed'));
+        if (!signal.aborted) setError(reason instanceof Error ? reason.message : t('taskLogs.loadFailed'));
       }
-    }
-    void load();
-    const timer = window.setInterval(() => void load(), 2000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
+      },
+    });
+    loop.start();
+    return () => loop.stop();
   }, [task.taskId, t]);
 
   return <section className="panel task-log-panel" aria-labelledby="task-log-heading">

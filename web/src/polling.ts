@@ -8,6 +8,13 @@ export interface PollingLoop {
   stop(): void;
 }
 
+export async function runIndependentRefreshes(
+  refreshTasks: () => Promise<void>,
+  refreshComparisons: () => Promise<void>,
+): Promise<void> {
+  await Promise.allSettled([refreshTasks(), refreshComparisons()]);
+}
+
 export function createPollingLoop({ intervalMs, run }: PollingOptions): PollingLoop {
   let stopped = true;
   let running = false;
