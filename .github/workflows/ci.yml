@@ -25,21 +25,13 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm --prefix web ci
-      - name: Check on Windows
+      - name: Verify on Windows
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./check.ps1
-      - name: Check M12 worker lifecycle on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          go test ./internal/worker ./internal/integration -run 'M12Worker|M12Lease|M12Recovery' -count=1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./build.ps1
+        run: ./scripts/verify.ps1
+      - name: Install frontend dependencies on Unix
+        if: runner.os != 'Windows'
+        run: npm --prefix web ci
       - name: Check on Unix
         if: runner.os != 'Windows'
         run: make check
