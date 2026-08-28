@@ -1,50 +1,35 @@
-package diff
-
-import (
-	"testing"
-	"time"
-)
-
-func TestServiceCreateValidatesObservationTimes(t *testing.T) {
-	service := NewService(t.TempDir())
-	baseline := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
-	target := baseline.Add(2 * time.Hour)
-
-	created, err := service.Create(CreateRequest{
-		Name: "timed", BaselineTaskID: "base", TargetTaskID: "target",
-		BaselineObservedAt: &baseline, TargetObservedAt: &target,
-	})
+packaYHY™‚‚š[\ÜB€ ’&f×B  ’'7–æ2  ’•ÍÑ¥¹œˆ($‰Ñ¥µ”ˆ(¤()•nc TestServiceCreateValidatesObservationTimes(t *testing.T) {
+	service := NewSeqšXÙJ•[\\Š
+JB‚X˜\Ù[[™HH[YK‘]JŒ‹ËÌKL[YK•UÊB‚]\™Ù]H˜\Ù[[™KY
+ˆ
+ˆ[YK’İ\ŠB‚‚XÜ™X]Y\"£Ò6W'f–6Rä7&VFR„7&VFU&WVW7G° ”æÖS¢'F–ÖVB"Â&6VÆ–æUF6´”C¢&&6R"ÂF%•ÑQ…Í­%è€‰Ñ…Éet",
+		BaselineObservedAt: &baseline, TarY]Ø6W•‘Ğè€™Ñ…É•Ğ°(%ô¤(%¥˜•ÉÈ€„ô¹¥°ì($%Ğ¹…Ñ…°¡•ÉÈ¤(%ô(%¥˜É•…Ñ•¹	…Í•±¥¹•=‰Í•ÉÙ•‘Ğ€ôô¹¥°ñğÉ•…Ñ•¹Q…É•Ñ=‰Í•ÉÙ•‘Ğ€ôô¹¥°ñğ($$…É•…Ñ•¹	…Í•±¥¹•=‰Í•ÉÙ•‘Ğ¹ÅÕ…°¡‰…Í•±¥¹”¤ñğ€…É•…Ñ•¹Q…É•Ñ=‰Í•ÉÙ•‘Ğ¹ÅÕ…°¡Ñ…É•Ğ¤ì($%Ğ¹…Ñ…±˜ ‰É•…Ñ•ô”­Øˆ°É•…Ñ•¤(%ô(%É•±½…‘•°•Â := service.Get(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.BaselineObservedAt == nil || created.TargetObservedAt == nil ||
-		!created.BaselineObservedAt.Equal(baseline) || !created.TargetObservedAt.Equal(target) {
-		t.Fatalf("created=%+v", created)
-	}
-	reloaded, err := service.Get(created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reloaded.BaselineObservedAt == nil || reloaded.TargetObservedAt == nil ||
-		!reloaded.BaselineObservedAt.Equal(baseline) || !reloaded.TargetObservedAt.Equal(target) {
+	if reloaded.BaselineO`Ù\fVDBÓÒæ–ÂÇÂ&VÆöFVBåF%•Ñ=ƒeq™Y]OHš[‚BH\™[ØYY˜\Ù[[™SØœÙ\™Y]‘\]X[
+˜\Ù[[™JH\™[ØYY•\–WDö•ÆedAt.Equal(target) {
 		t.Fatalf("reloaded=%+v", reloaded)
 	}
 
-	for _, request := range []CreateRequest{
-		{Name: "without-times", BaselineTaskID: "base", TargetTaskID: "target"},
-		{Name: "only-baseline", BaselineTaskID: "base", TargetTaskID: "target", BaselineObservedAt: &baseline},
-		{Name: "equal", BaselineTaskID: "base", TargetTaskID: "target", BaselineObservedAt: &baseline, TargetObservedAt: &baseline},
-		{Name: "sub-second", BaselineTaskID: "base", TargetTaskID: "target", BaselineObservedAt: &baseline, TargetObservedAt: timePointer(baseline.Add(time.Nanosecond))},
-		{Name: "reverse", BaselineTaskID: "base", TargetTaskID: "target", BaselineObservedAt: &target, TargetObservedAt: &baseline},
-	} {
-		_, err := service.Create(request)
-		if request.Name == "without-times" && err != nil {
-			t.Fatalf("request=%s err=%v", request.Name, err)
+	for _, request := ranYH×PÜ™X]T™\]Y\İÂ‚B^Ó˜[YNˆÚ]İ]][Y\È‹˜\Ù[[™U\ÚÒQˆ˜˜\ÙH‹\™Ù]\ÚÒQˆ\™Ù]ÒÀ —´æÖS¢&öæÇ’Ö&6VÆ–æR"Â&6VÆ–æUF6´”C¢&&6R"ÂF&vWEF6´”C¢'F&vWB"Â&6VÆ–æTö•ÆedAt: &baseline},
+		{Name: "equal", BaselineTaskID: "base", TarY]\ÚÒQˆ\–WB"Â&6VÆ–æTö'6W'fVDC¢f&6VÆ–æRÂF&vWDö'6W'fVDC¢f&6VÆ–æWÒÀ —´æÖS¢ÕˆµÍ•½¹ˆ°	…Í•±¥¹•Q…Í­%è€‰‰…Í”ˆ°Q…ÉetTaskID: "tarY]‹˜\Ù[[™SØœÙ\™Y]ˆ	˜˜\Ù[[™K\™Ù]ØœÙ\™Y]ˆ[YTÚ[\Š˜\Ù[[™KY
+[YK“˜[›ÜÙXÛÛ™
+J_K‚B^Ó˜[YNˆ&WfW'6R"Â&6VÆ–æUF6´”C¢&&6R"ÂF%•ÑQ…Í­%è€‰Ñ…Éet", BaselineObservedAt: &tarY]\™Ù]ØœÙ\™Y]ˆ	˜˜\Ù[[™_K‚_HÂ‚BWË\"£Ò6W'f–6Rä7&VFR‡&WVW7B ––b&WVW7BäæÖRÓÒ¥Ñ¡½ÕĞµÑ¥µ•Ìˆ€˜˜•ÉÈ€„ô¹¥°ì($$%Ğ¹…Ñ…±˜ ‰É•ÅÕ•ÍĞô•Ì•Â=%v", request.Name, err)
 		}
-		if request.Name != "without-times" && err == nil {
-			t.Fatalf("request=%s accepted invalid observation times", request.Name)
+		if request.Name != "without-times" && epˆOHš[Â‚BB]‘˜][Š&WVW7CÒW266WFVB–çfÆ–Bö•Æation times", request.Name)
 		}
-	}
-}
-
-func timePointer(value time.Time) *time.Time { return &value }
+	}B‚™[˜È[YTÚ[\Š˜[YH[YK•[YJH
+[YK•[YHÈ™]\›ˆ	˜[YHB‚™[˜È\İÙ\šXÙSX[šY™\İİ\ÜĞÛÛ˜İ\&VÑI•…‘Í¹‘]É¥Ñ•Ì¡Ğ€©Ñ•ÍÑ¥¹.T) {
+	seqšXÙHH™]ÔÙ\šXÙJ•[\\Š
+JB‚Z][K\œˆHÙ\šXÙKÜ™X]JÜ™X]T™\]Y\İÓ˜[YNˆ˜ÛÛ˜İ\œ™[‹˜\Ù[[™U\ÚÒQˆ˜˜\ÙH‹\™Ù]\ÚÒQˆ\™Ù]Ò ––bW€„ô¹¥°ì($%Ğ¹…Ñ…°¡•ÉÈ¤(%ô((%½¹ÍĞ¥Ñ•É…Ñ¥½¹Ì€ô€ÈÀÀ(%•ÂopÈHXZÙJÚ[ˆ\œ›Ü‹ŠB‚]˜\ˆÜ›İ\Ş[˜Ë•ØZ]Ü›İ\‚W&÷WäFBƒ" –vògVæ2‚’° –FVfW"w&÷WäFöæR‚ –f÷"–æFW‚£Ò²–æFW‚Â—FW&F–öç3²–æFW‚²²° –—FVÒäæÖRÒf×Bå7&–Ñ˜ ‰½¹ÕÉÉ•¹Ğ´•ˆ°¥¹‘•à¤($$%¥˜•ÉÈ€èôÍ•ÉÙ¥”¹M…Ù”¡¥Ñ•´¤ì•ÉÈ€„ô¹¥°ì($$$%•ÉÉ½ÉÌ€ğ´™µĞ¹Âorf( Ø]™H]\˜][Ûˆ	Yˆ	]È‹[™^\" —&WGW&à —Ğ —Ğ —Ò‚ –vòU¹Œ ¤ì($%‘•™•Èroup.Done()
+		for index := 0; index < iterations; index++ {
+			if _, err := seqšXÙK‘Ù]
+][K’Q
+NÈ\"Òæ–Â° –W'&÷'2ÂÒf×BäW'&÷&b‚%•Ğ¥Ñ•É…Ñ¥½¸€•è€•Üˆ°¥¹‘•à°•Â)
+				return
+			}
+		}
+	}()
+	group.Wait()
+	close(ep›Ü2 –f÷"W'"£Ò&ævRW'&÷'2° —BäfFÂ†W¤(%ô-

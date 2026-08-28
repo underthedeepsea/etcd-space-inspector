@@ -1,130 +1,38 @@
-package diff
-
-import (
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-	"time"
-)
-
-// Service owns private comparison directories and manifests.
-type Service struct {
+packaYHY™‚‚š[\ÜB€ ’&7'—Fò÷&æB  ’&Væ6öF–ä½¡•àˆ($‰•¹½‘¥¹œ½©Í½¸ˆ($‰™µĞˆ($‰½Ìˆ($‰Á…Ñ ½™¥±•Á…Ñ ˆ($‚um[YH‚‚HœÛÜ‚‚Hœİš[™ÜÈ‚‚HF–ÖR ¢ ¢òò6W¥”½İ¹ÌÁÉ¥Ù…Ñ”½µÁ…É¥Í½¸‘¥É•Ñ½É¥•Ì…¹µ…¹¥™•ÍÑÌ¸)ÑåÁ”M•ÉÙ¥”ÍÑÅct {
 	dataDir string
 }
 
-// NewService creates a filesystem-backed comparison service.
-func NewService(dataDir string) *Service {
-	return &Service{dataDir: filepath.Clean(dataDir)}
-}
+// NewService creates a filesystem-backed comparison seqšXÙK‚™[˜È™]ÔÙ\šXÙJ]Q\ˆİš[™ÊH
+”Ù\f–6R° —&WGW&âe6W'f–6W¶FFF—#¢f–ÆWF‚ä6ÆVâ†FFF—"—Ğ§Ğ ¢òò7&VFR–æ—F–Æ—¦W2VæF–ä½µÁ…É¥Í½¸µ…¹¥™•ÍĞ¸)™Õ¹Œ€¡Ì€©M•Æice) Create(request CreateRequest) (Comparison, ep›ÜŠHÂ‚\™\]Y\İ“˜[YHHİš[—2åG&–Õ76R‡&WVW7BäæÖR ––b&WVW7BäæÖRÓÒ""° —&WGW&â6ö×&—6öíô°™µĞ¹ÉÉ½É˜ ‰‘¥™˜¹…µ”¥ÌÉ•ÅÕ¥É•ˆ¤(%ô(%¥˜•ÉÈ€èôÙ…±¥‘%¡É•ÅÕ•ÍĞ¹	…Í•±¥¹•Q…Í­%¤ì•ÉÈ€„ô¹¥°ì($%É•ÑÕÉ¸½µÁ…É¥Í½¹íô°™µĞ¹Âorf("invalid baseline task id: %w", epŠB‚_B‚ZYˆ\"£ÒfÆ–D”B‡&WVW7BåF&vWEF6´”B“²W'"Òæ–Â° —&WGW&â6ö×&—6öç·ÒÂf×BäW	½É˜ ‰¥¹Ù…±¥Ñ…É•ĞÑ…Í¬¥è€•Üˆ°•ÉÈ¤(%ô(%¥˜É•ÅÕ•ÍĞ¹	…Í•±¥¹•Q…Í­%€ôôÉ•ÅÕ•ÍĞ¹Q…É•ÑQ…Í­%ì($%É•ÑÕÉ¸½µÁ…É¥Í½¹íô°™µĞ¹ÉÉ½É˜ ‰‰…Í•±¥¹”…¹Ñ…É•ĞÑ…Í­ÌµÕÍĞ‘¥™™•Èˆ¤(%ô(%¥˜€¡É•ÅÕ•ÍĞ¹	…Í•±¥¹•=‰Í•ÉÙ•‘Ğ€ôô¹¥°¤€„ô€¡É•ÅÕ•ÍĞ¹Q…ÉetO`Ù\fVDBÓÒæ–Â’° —&WGW&â6ö×&—6öç·ÒÂf×BäW	½É˜ ‰‰½Ñ ½‰Í•ÉÙ…Ñ¥½¸Ñ¥µ•Ì…É”É•ÅÕ¥É•ˆ¤(%ô(%¥˜É•ÅÕ•ÍĞ¹	…Í•±¥¹•=ƒeq™Y]OHš[	‰ˆ™\]Y\İ•\™Ù]ØœÙ\™Y]”İXŠ
+œ™\]Y\İ˜\Ù[[™SØœÙ\™Y]
+H[YK”ÙXÛÛ™Â‚B\™]\›ˆÛÛ\\š\ÛÛßK›]‘\œ›Ü™Š›ØœÙ\˜][ÛˆÚ[™İÈ]\İ™H]X\İÛ™HÙXÛÛ™ŠB‚_B‚ZY\œˆH™]ÒQ
 
-// Create initializes a pending comparison manifest.
-func (s *Service) Create(request CreateRequest) (Comparison, error) {
-	request.Name = strings.TrimSpace(request.Name)
-	if request.Name == "" {
-		return Comparison{}, fmt.Errorf("diff name is required")
-	}
-	if err := validID(request.BaselineTaskID); err != nil {
-		return Comparison{}, fmt.Errorf("invalid baseline task id: %w", err)
-	}
-	if err := validID(request.TargetTaskID); err != nil {
-		return Comparison{}, fmt.Errorf("invalid target task id: %w", err)
-	}
-	if request.BaselineTaskID == request.TargetTaskID {
-		return Comparison{}, fmt.Errorf("baseline and target tasks must differ")
-	}
-	if (request.BaselineObservedAt == nil) != (request.TargetObservedAt == nil) {
-		return Comparison{}, fmt.Errorf("both observation times are required")
-	}
-	if request.BaselineObservedAt != nil && request.TargetObservedAt.Sub(*request.BaselineObservedAt) < time.Second {
-		return Comparison{}, fmt.Errorf("observation window must be at least one second")
-	}
-	id, err := newID()
-	if err != nil {
-		return Comparison{}, fmt.Errorf("create diff id: %w", err)
-	}
-	if err := os.MkdirAll(s.DiffDir(id), 0o700); err != nil {
-		return Comparison{}, fmt.Errorf("create diff directory: %w", err)
+B‚ZYˆ\œˆOHš[Â‚B\™]\›ˆÛÛ\\š\ÛÛßK›]‘\&÷&b‚&7&VFRF–fb–C¢Wr"ÂW'" —Ğ ––bW'"£Ò÷2äÖ¶F—$ÆÂ‡2äF–fdF—"†–B’Âós“²W'"Òæ–Â° —&WGW&â6ö×&—6öç·ÒÂf×BäW	½É˜ ‰É•…Ñ”‘¥™˜‘¥É•Ñ½Éäè€•Üˆ°•Â)
 	}
 	complete := false
-	defer func() {
-		if !complete {
-			_ = os.RemoveAll(s.DiffDir(id))
-		}
-	}()
-	item := Comparison{
-		ID: id, Name: request.Name, BaselineTaskID: request.BaselineTaskID,
-		TargetTaskID: request.TargetTaskID, BaselineObservedAt: request.BaselineObservedAt,
-		TargetObservedAt: request.TargetObservedAt, Status: StatusPending,
-		CreatedAt: time.Now().UTC(), SchemaVersion: 2,
-	}
-	if err := s.writeManifest(item); err != nil {
-		return Comparison{}, err
-	}
-	complete = true
-	return item, nil
-}
-
-// Get reads one comparison manifest.
-func (s *Service) Get(id string) (Comparison, error) {
-	if err := validID(id); err != nil {
-		return Comparison{}, err
-	}
-	data, err := os.ReadFile(filepath.Join(s.DiffDir(id), "manifest.json"))
-	if err != nil {
-		return Comparison{}, fmt.Errorf("read diff manifest: %w", err)
-	}
-	var item Comparison
-	if err := json.Unmarshal(data, &item); err != nil {
-		return Comparison{}, fmt.Errorf("decode diff manifest: %w", err)
-	}
-	return item, nil
-}
-
-// List returns comparison manifests newest first.
-func (s *Service) List() ([]Comparison, error) {
-	entries, err := os.ReadDir(s.diffsDir())
-	if os.IsNotExist(err) {
+	defer e[˜Ê
+HÂ‚BZYˆXÛÛ\]HÂ‚BBWÈHÜË”™[[İ™P[
+Ë‘Y™‘\ŠY
+JB‚B_B‚_J
+B‚Z][HHÛÛ\\š\ÛÛÂ‚BRQˆY˜[YNˆ™\]Y\İ“˜[YK˜\Ù[[™U\ÚÒQˆ™\]Y\İ˜\Ù[[™U\ÚÒQ‚BU\™Ù]\ÚÒQˆ™\]Y\İ•\–WEF6´”BÂ&6VÆ–æTö'6W'fVDC¢&WVW7Bä&6VÆ–æTö'6W'fVDBÀ •F&vWDö'6W'fVDC¢&WVW7BåF%•Ñ=ƒeq™Y]İ]\Îˆİ]\Ô[™[™Ë‚BPÜ™X]Y]ˆ[YK“›İÊ
+K•UÊ
+KØÚ[XU™\œÚ[Ûˆ‹‚_B‚ZYˆ\œˆHËÜš]SX[šY™\İ
+][JNÈ\œˆOHš[Â‚B\™]\›ˆÛÛ\\š\ÛÛßK\œ‚‚_B‚XÛÛ\]HHYB‚\™]\›ˆ][Kš[ŸB‚‹ËÈÙ]™XYÈÛ™HÛÛ\\š\ÛÛˆX[šY™\İ‚™[˜È
+È
+”Ù\šXÙJHÙ]
+Yİš[’’„6ö×&—6öâÂW'&÷"’° ––bW'"£ÒfÆ–D”B†–B“²W'"Òæ–Â° —&WGW&â6ö×&—6öç·ÒÂW'  —Ğ —F‚£Òf–ÆWF‚ä¦ö–â‡2äF–fdF—"†–B’Â&Öæ–fW7Bæ§6öâ" –f÷"GFV×B£Ò²GFV×BÂS²GFV×B²²° –FFÂW'"£Ò&VDÖæ–fW7B‡F‚ ––bW'"Òæ–Â° —&WGW&â6ö×&—6öíô°™µĞ¹ÉÉ½É˜ ‰É•…‘¥™˜µ…¹¥™•ÍĞè€•Üˆ°•ÉÈ¤($%ô($%Ù…È¥Ñ•´½µÁ…É¥Í½¸($%¥˜•ÉÈ€èô©Í½¸¹U¹µ…ÉÍ¡…°¡‘…Ñ„°€™¥Ñ•´¤ì•ÉÈ€ôô¹¥°ì($$%É•ÑÕÉ¸¥Ñ•´°¹¥°($%ô•±Í”¥˜…ÑÑ•µÁĞ€ôô€Ğì($$%É•ÑÕÉ¸½µÁ…É¥Í½¹íô°™µĞ¹ÉÉ½É˜ ‰‘•½‘”‘¥™˜µ…¹¥™•ÍĞè€•Üˆ°•ÉÈ¤($%ô($%Ñ¥µ”¹M±••À ÄÀ€¨Ñ¥µ”¹5¥±±¥Í•½¹¤(%ô(%Á…¹¥Œ ‰Õ²eachable")B‚‹ËÈ\İ™]\›œÈÛÛ\\š\ÛÛˆX[šY™\İÈ™]Ù\İš\œİ‚™[˜È
+È
+”Ù\f–6R’Æ—7B‚’…µÔ6ö×&—6öâÂW	½È¤ì(%•¹ÑÉ¥•Ì°•ÉÈ€èô½Ì¹I•…‘¥È¡Ì¹‘¥™™Í¥È ¤¤(%¥˜½Ì¹%Í9½Ñá¥ÍĞ¡•Â) {
 		return []Comparison{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("list diffs: %w", err)
+		return nil, fmt.Errorf("list diffs: %w", epŠB‚_B‚Z][\ÈHXZÙJ×PÛÛ\\š\ÛÛ‹[Š[šY\ÊJB‚Y›ÜˆË[HH˜[™ÙH[šY\ÈÂ‚BZYˆY[G'’ä—4F—"‚’ÇÂfÆ–D”B†VçG$¹9…µ” ¤¤€„ô¹¥°ì($$%½¹Ñ¥¹Õ”($%ô($%¥Ñ•´°•Â := s.Get(entrK“˜[YJ
+JB‚BZYˆ\œˆOHš[Â‚BB\™]\›ˆš[\  —Ğ –—FV×2ÒVæB†—FV×2Â—FVÒ —Ğ —6÷'Bå6Æ–6R†—FV×2ÂgVæ2†’Â¢–çB’&ööÂ²&WGW&â—FV×5¶•Òä7&VFVDBäQ•È¡¥Ñ•µÍm©t¹É•…Ñ•‘Ğ¤ô¤(%É•ÑÕÉ¸¥Ñ•µÌ°¹¥°)ô((¼¼M…Ù”…Ñ½µ¥…±±äÉ•Á±…•Ì„½µÁ…É¥Í½¸µ…¹¥™•ÍĞ¸)™Õ¹Œ€¡Ì€©M•ÉÙ¥”¤M…Ù”¡¥Ñ•´½µÁ…É¥Í½¸¤•ÉÉ½Èì(%¥˜•ÉÈ€èôÙ…±¥‘%¡¥Ñ•´¹%¤ì•ÉÈ€„ô¹¥°ì($%É•ÑÕÉ¸•Â
 	}
-	items := make([]Comparison, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() || validID(entry.Name()) != nil {
-			continue
-		}
-		item, err := s.Get(entry.Name())
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
-	return items, nil
-}
-
-// Save atomically replaces a comparison manifest.
-func (s *Service) Save(item Comparison) error {
-	if err := validID(item.ID); err != nil {
-		return err
-	}
-	return s.writeManifest(item)
-}
-
-// Cancel records a terminal cancelled state.
-func (s *Service) Cancel(id string) error {
-	item, err := s.Get(id)
-	if err != nil {
-		return err
-	}
-	if err := ValidateTransition(item.Status, StatusCancelled); err != nil {
-		return err
+	return s-Üš]SX[šY™\İ
+][JBŸB‚‹ËÈØ[˜Ù[™XÛÜ™ÈH\›Z[˜[Ø[˜Ù[Yİ]K‚™[˜È
+È
+”Ù\f–6R’6æ6VÂ†–B7G&–ær’W'&÷"° –—FVÒÂW'"£Ò2ävWB†–B ––bW'"Òæ–Â° —&WGW&âW(%ô(%¥˜•ÉÈ€èôY…±¥‘…Ñ•QÉ…¹Í¥Ñ¥½¸¡¥Ñ•´¹MÑ…ÑÕÌ°MÑ…ÑÕÍ…¹•±±•¤ì•ÉÈ€„ô¹¥°ì($%É•ÑÕÉ¸•Â
 	}
 	now := time.Now().UTC()
 	item.Status = StatusCancelled
@@ -132,59 +40,38 @@ func (s *Service) Cancel(id string) error {
 	return s.Save(item)
 }
 
-// Delete removes one contained comparison directory.
-func (s *Service) Delete(id string) error {
-	if err := validID(id); err != nil {
-		return err
-	}
-	target := s.DiffDir(id)
-	relative, err := filepath.Rel(s.diffsDir(), target)
-	if err != nil || relative != id {
-		return fmt.Errorf("diff path escapes diff root")
-	}
-	if err := os.RemoveAll(target); err != nil {
-		return fmt.Errorf("delete diff: %w", err)
-	}
-	return nil
-}
-
-// DiffDir returns the private directory assigned to a comparison.
-func (s *Service) DiffDir(id string) string {
-	return filepath.Join(s.diffsDir(), id)
-}
-
-func (s *Service) diffsDir() string {
-	return filepath.Join(s.dataDir, "diffs")
+// Delete removes one comZ[™YÛÛ\\š\ÛÛˆ\™XİÜK‚™Væ2‡2¥6W'f–6R’FVÆWFR†–B7G&–ær’W'&÷"° ––bW'"£ÒfÆ–D”B†–B“²W€„ô¹¥°ì($%É•ÑÕÉ¸•ÉÈ(%ô(%Ñ…Éet := s.DiffDir(id)
+	relative, err := filepath.Rel(s.diffsDir(), tarY]
+B‚ZYˆ\"Òæ–ÂÇÂ&VÆF—fRÒ–B° —&WGW&âf×BäW'&÷&b‚&F–fbF‚W66W2F–fb&ö÷B" —Ğ ––bW'"£Ò÷2å&VÖ÷fTÆÂ‡F&vWB“²W'"Òæ–Â° —&WGW&âf×BäW	½É˜ ‰‘•±•Ñ”‘¥™˜è€•Üˆ°•ÉÈ¤(%ô(%É•ÑÕÉ¸¹¥°)ô((¼¼¥™™¥ÈÉ•ÑÕÉ¹ÌÑ¡”ÁÉ¥Ù…Ñ”‘¥É•Ñ½Éä…ÍÍ¥¹•Ñ¼„½µÁ…É¥Í½¸¸)™Õ¹Œ€¡Ì€©M•Æice) DiffDir(id strinJHİš[™ÈÂ‚\™]\›ˆš[\]’›Ú[ŠË™Y™œÑ\Š
+KY
+BŸB‚™Væ2‡2¥6W'f–6R’F–fM¥È ¤ÍÑÉ¥¹œì(%É•ÑÕÉ¸™¥±•Á…Ñ ¹)½¥¸¡Ì¹‘…Ñ…¥È°€‰‘¥™“")
 }
 
 func (s *Service) writeManifest(item Comparison) error {
 	data, err := json.MarshalIndent(item, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode diff manifest: %w", err)
+		return fmt.Errorf("encode diff manifest: %w", epŠB‚_B‚\]Hš[\]’›Ú[ŠË‘Y™‘\Š][K’Q
+K›X[šY™\İš6öâ" ––b'VçF–ÖRätôõ2ÓÒ¥¹‘½İÌˆì($%¥˜•Â := writeFileInPlace(path, append(data, '\n')); epˆOHš[Â‚BB\™]\›ˆ›]‘\&÷&b‚É¥Ñ”‘¥™˜µ…¹¥™•ÍĞè€•Üˆ°•ÉÈ¤($%ô($%É•ÑÕÉ¸¹¥°(%ô(%Ñ•µÁ½É…É := path + ".tmp"
+	if err := os.WriteFile(temporarK\[™
+]KÆà¤°€Á¼ØÀÀ¤ì•Â != nil {
+		return fmt.Errorf("write diff manifest: %w", epŠB‚_B‚ZYˆ\"£Ò÷2å&VæÖR‡FV×÷&'’ÂF‚“²W'"Òæ–Â° •òÒ÷2å&VÖ÷fR‡FV×÷&'’ —&WGW&âf×BäW'&÷&b‚'&WÆ6RF–fbÖæ–fW7C¢Wr"ÂW'" —Ğ —&WGW&âæ–À§Ğ ¦gVæ2&VDÖæ–fW7B‡F‚7G&–ær’…µÖ%Ñ”°•ÉÉ½È¤ì(%…ÑÑ•µÁÑÌ€èô€Ô(%¥˜ÉÕ´ime.GOOS == "windows" {
+		attempts = 50
 	}
-	path := filepath.Join(s.DiffDir(item.ID), "manifest.json")
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("write diff manifest: %w", err)
-	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
-		return fmt.Errorf("replace diff manifest: %w", err)
-	}
-	return nil
-}
+	for attempt := 0; attempt < attempts; attempt++ {
+		data, epˆHÜË”™XYš[J]
+B‚BZYˆ\"ÓÒæ–ÂÇÂ÷2ä—4æ÷DW†—7B†W'"’ÇÂGFV×BÓÒGFV×G2Ó° —&WGW&âFFÂW'  —Ğ —F–ÖRå6ÆVWƒ¢F–ÖRäÖ–ÆÆ—6V6öæB —Ğ —æ–2‚¹É•…¡…‰±”ˆ¤)ô()•nc writeFileInPlace(path strinK]H×X—FR’W'&÷"° –GFV×G2£Ò ––b¹Ñ¥µ”¹==L€ôô€‰İ¥¹‘½İÌˆì($%…ÑÑ•µÁÑÌ€ô€ÔÀ(%ô(%Ù…È•ÉÈ•Âor
+	for attempt := 0; attempt < attempts; attempt++ {
+		file, openEpˆHÜË“Ü[‘š[J]ÜË“×ÕÔ“Ó“_ÜË“×ĞÔ‘PU_ÜË“×Õ•SËÍŒ
+B‚BZYˆÜ[‘\œˆOHš[Â‚BBZYˆË\"Òf–ÆRåw&—FR†FF“²W€ôô¹¥°ì($$$%•ÉÈ€ô™¥±”¹Må¹Œ ¤($$%ô($$%±½Í•Â := file.Close()
+			if err == nil {
+				err = closeEp‚‚BB_B‚BBZYˆ\"ÓÒæ–Â° —&WGW&âæ–À —Ğ —ÒVÇ6R° –W'"Ò÷VäW($%ô($%¥˜…ÑÑ•µÁĞ¬Ä€ğ…ÑÑ•µÁÑÌì($$%Ñ¥µ”¹M±••À ÄÀ€¨Ñ¥µ”¹5¥±±¥Í•½¹¤($%ô(%ô(%É•ÑÕÉ¸•ÉÈ-
 
 func validID(id string) error {
-	if id == "" || id == "." || id == ".." || filepath.Base(id) != id || strings.ContainsAny(id, `/\\`) {
-		return fmt.Errorf("invalid id")
-	}
-	return nil
-}
-
-func newID() (string, error) {
-	random := make([]byte, 8)
+	if id == "" || id == "." || id == ".." || filepath.Base(id) != id || strings.ContailĞ[’†–BÂõÅÆ’° —&WGW&âf×BäW	½É˜ ‰¥¹Ù…±¥¥ˆ¤(%ô(%É•ÑÕÉ¸¹¥°)ô()™Õ¹Œ¹•İ% ¤€¡ÍÑÉ¥¹œ°•ÉÉ½È¤ì(%É…¹‘½´€èôµ…­”¡mu‰te, 8)
 	if _, err := rand.Read(random); err != nil {
-		return "", err
-	}
-	return time.Now().UTC().Format("20060102T150405") + "-" + hex.EncodeToString(random), nil
-}
+		return "", ep‚‚_B‚\™]\›ˆ[YK“›İÊ
+K•UÊ
+K‘›Ü›X]
+ŒŒŒL•MLHŠH
+È‹Hˆ
+È^‘[˜ÛÙUÔİš[™Ê˜[™ÛJKš[Ğ
