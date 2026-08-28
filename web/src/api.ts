@@ -514,7 +514,7 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
       throw new Error(error?.message ?? `Request failed (${response.status})`);
     }
     if (response.status === 204) return undefined as T;
-    return response.json() as Promise<T>;
+    return await response.json() as T;
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
     callerSignal?.removeEventListener('abort', abortFromCaller);
